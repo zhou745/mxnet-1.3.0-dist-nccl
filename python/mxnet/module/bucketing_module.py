@@ -30,7 +30,8 @@ class BucketingModule(BaseModule):
         Default `None`, indicating uniform workload.
     """
     def __init__(self, sym_gen, default_bucket_key=None,
-                 logger=logging, context=ctx.cpu(), work_load_list=None):
+                 logger=logging, context=ctx.cpu(), work_load_list=None,
+                 fixed_param_prefix=None):
         super(BucketingModule, self).__init__(logger=logger)
 
         assert default_bucket_key is not None
@@ -39,6 +40,9 @@ class BucketingModule(BaseModule):
         self._sym_gen = sym_gen
         self._context = context
         self._work_load_list = work_load_list
+        self._fixed_param_prefix = fixed_param_prefix
+        if self._fixed_param_prefix is None:
+            self._fixed_param_prefix = []
 
         self._buckets = {}
         self._curr_module = None
@@ -206,9 +210,15 @@ class BucketingModule(BaseModule):
         assert self.binded, 'call bind before switching bucket'
         if not bucket_key in self._buckets:
             symbol, data_names, label_names = self._sym_gen(bucket_key)
+            fixed_param_names = list()
+            for name in symbol.list_arguments():
+                for prefix in self._fixed_param_prefix:
+                    if prefix in name:
+                        fixed_param_names.append(name)
             module = Module(symbol, data_names, label_names,
                             logger=self.logger, context=self._context,
-                            work_load_list=self._work_load_list)
+                            work_load_list=self._work_load_list,
+                            fixed_param_names=fixed_param_names)
             module.bind(data_shapes, label_shapes, self._curr_module.for_training,
                         self._curr_module.inputs_need_grad,
                         force_rebind=False, shared_module=self._curr_module)
