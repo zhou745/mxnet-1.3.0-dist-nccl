@@ -231,7 +231,7 @@ __global__ void Correlate1DDataBackward1(const int nthreads,
 //  == Forward
 //  == Dimension rearrangement Kernel
 template <typename Dtype>
-__global__ void blob_rearrange_kernel2(const Dtype* in, Dtype* out, int num,
+__global__ void blob_rearrange_kernel2_corr1D(const Dtype* in, Dtype* out, int num,
 int channels, int width, int height, int widthheight, int padding, int pwidthheight) {
     //  change shape from [batchsize,channel,y,x] to [batchsize,y,x,channel]
   int xy = blockIdx.x*blockDim.x + threadIdx.x;
@@ -278,9 +278,9 @@ void Forward_gpu(
     int threads_per_block = 16;
     dim3 totalBlocksRearr((bwidthheight - 1) / threads_per_block + 1, bchannels, bnum);
     const int pwidthheight = (bwidth + 2 * pad_size_) * (bheight);
-    blob_rearrange_kernel2<Dtype><<<totalBlocksRearr, threads_per_block, 0, stream_tmp1>>>
+    blob_rearrange_kernel2_corr1D<Dtype><<<totalBlocksRearr, threads_per_block, 0, stream_tmp1>>>
     (bottom_data1, rbot1, bnum, bchannels, bwidth, bheight, bwidthheight, pad_size_, pwidthheight);
-    blob_rearrange_kernel2<Dtype><<<totalBlocksRearr, threads_per_block, 0, stream_tmp2>>>
+    blob_rearrange_kernel2_corr1D<Dtype><<<totalBlocksRearr, threads_per_block, 0, stream_tmp2>>>
     (bottom_data2, rbot2, bnum, bchannels, bwidth, bheight, bwidthheight, pad_size_, pwidthheight);
     const int num = bnum;
     const int channels = bchannels;
