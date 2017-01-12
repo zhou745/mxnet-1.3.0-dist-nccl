@@ -33,6 +33,7 @@ struct SoftmaxOutputParam : public dmlc::Parameter<SoftmaxOutputParam> {
   bool multi_output;
   bool use_ignore;
   bool preserve_shape;
+  bool is_hidden_layer;
   int normalization;
   bool out_grad;
   DMLC_DECLARE_PARAMETER(SoftmaxOutputParam) {
@@ -52,6 +53,9 @@ struct SoftmaxOutputParam : public dmlc::Parameter<SoftmaxOutputParam> {
     .describe("If true, for a (n_1, n_2, ..., n_d, k) dimensional "
       "input tensor, softmax will generate (n1, n2, ..., n_d, k) output, "
       "normalizing the k classes as the last dimension.");
+    DMLC_DECLARE_FIELD(is_hidden_layer).set_default(false)
+    .describe("If set to true, out_grad is needed in backward"
+      "Be advised that there is a conflict between this option and out_grad.");
     DMLC_DECLARE_FIELD(normalization)
     .add_enum("null", softmaxout_enum::kNull)
     .add_enum("batch", softmaxout_enum::kBatch)
@@ -180,6 +184,29 @@ class SoftmaxOutputOp : public Operator {
           out_grad[softmaxout_enum::kOut].get_with_shape<xpu, 3, DType>(s3, s);
         grad *= ograd;
       }
+      if (param_.is_hidden_layer) {
+        Tensor<xpu, 3, DType> o_grad =
+          out_grad[softmaxout_enum::kOut].get_with_shape<xpu, 3, DType>(s3, s);
+        grad *= o_grad;
+        // cancel out previous normalization and normalize against valid grad count
+        // the s3[2] is the number of multi_output, total grad must be normalized by this or valid_cnt (valid multiple output * batch size)
+        index_t valid_grad = 0;
+        if (param_.normalization == softmaxout_enum::kBatch || param_.normalization == softmaxout_enum::kValid) {
+          Tensor<cpu, 3, DType> workspace = ctx.requested[softmaxout_enum::kTempSpace].get_host_space_typed<3, DType>(o_grad.shape_);
+          Copy(workspace, o_grad, o_grad.stream_);
+          for (index_t i = 0; i < workspace.size(0); i++) {
+            for (index_t k = 0; k < workspace.size(2); k++) {
+              if (workspace[i][0][k] > 0) {
+                valid_grad++;
+              }
+            }
+          }
+          valid_grad = valid_grad == 0 ? 1 : valid_grad;
+        } else {
+          valid_grad = 1;
+        }
+        grad *= DType(static_cast<float>(param_.normalization == softmaxout_enum::kValid ? 1 : s3[2]) * static_cast<float>(valid_cnt) / static_cast<float>(valid_grad));
+      }
     } else {
       Shape<1> label_shape = Shape1(in_data[softmaxout_enum::kLabel].Size());
       Shape<2> data_shape;
@@ -226,6 +253,26 @@ class SoftmaxOutputOp : public Operator {
         Tensor<xpu, 2, DType> ograd =
           out_grad[softmaxout_enum::kOut].get_with_shape<xpu, 2, DType>(data_shape, s);
         grad *= ograd;
+      }
+      if (param_.is_hidden_layer) {
+        Tensor<xpu, 2, DType> o_grad =
+          out_grad[softmaxout_enum::kOut].get_with_shape<xpu, 2, DType>(data_shape, s);
+        grad *= o_grad;
+        // cancel out previous normalization and normalize against valid grad count
+        index_t valid_grad = 0;
+        if (param_.normalization == softmaxout_enum::kBatch || param_.normalization == softmaxout_enum::kValid) {
+          Tensor<cpu, 2, DType> workspace = ctx.requested[softmaxout_enum::kTempSpace].get_host_space_typed<2, DType>(o_grad.shape_);
+          Copy(workspace, o_grad, o_grad.stream_);
+          for (index_t i = 0; i < workspace.size(0); i++) {
+            if (workspace[i][0] > 0) {
+              valid_grad++;
+            }
+          }
+          valid_grad = valid_grad == 0 ? 1 : valid_grad;
+        } else {
+          valid_grad = 1;
+        }
+        grad *= DType(static_cast<float>(valid_cnt) / static_cast<float>(valid_grad));
       }
     }
   }
@@ -328,7 +375,10 @@ class SoftmaxOutputProp : public OperatorProperty {
     const std::vector<int> &out_grad,
     const std::vector<int> &in_data,
     const std::vector<int> &out_data) const override {
-    if (param_.out_grad) {
+    if (param_.is_hidden_layer) {
+      return {in_data[softmaxout_enum::kLabel], out_data[softmaxout_enum::kOut],
+              out_grad[softmaxout_enum::kOut]};
+    } else if (param_.out_grad) {
       return {in_data[softmaxout_enum::kLabel], out_data[softmaxout_enum::kOut],
               out_grad[softmaxout_enum::kOut]};
     } else {
