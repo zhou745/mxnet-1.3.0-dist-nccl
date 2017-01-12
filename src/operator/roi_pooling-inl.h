@@ -31,6 +31,7 @@ enum ROIPoolingOpOutputs {kOut, kMaxIdx};
 struct ROIPoolingParam : public dmlc::Parameter<ROIPoolingParam> {
   TShape pooled_size;
   float spatial_scale;
+  float pad_ratio;
   DMLC_DECLARE_PARAMETER(ROIPoolingParam) {
     DMLC_DECLARE_FIELD(pooled_size)
     .set_expect_ndim(2).enforce_nonzero()
@@ -38,6 +39,8 @@ struct ROIPoolingParam : public dmlc::Parameter<ROIPoolingParam> {
     DMLC_DECLARE_FIELD(spatial_scale).set_range(0.0, 1.0)
     .describe("Ratio of input feature map height (or w) to raw image height (or w). "
     "Equals the reciprocal of total stride in convolutional layers");
+    DMLC_DECLARE_FIELD(pad_ratio).set_range(0.0, 1.0).set_default(0.0)
+    .describe("pad ratio of rois, one-sided");
   }
 };
 
@@ -71,7 +74,7 @@ class ROIPoolingOp : public Operator {
     CHECK_EQ(max_idx.CheckContiguous(), true);
     out = -FLT_MAX;
     max_idx = -1.0f;
-    ROIPoolForward(out, data, bbox, max_idx, param_.spatial_scale);
+    ROIPoolForward(out, data, bbox, max_idx, param_.spatial_scale, param_.pad_ratio);
   }
 
   virtual void Backward(const OpContext &ctx,
@@ -106,7 +109,7 @@ class ROIPoolingOp : public Operator {
       if (kWriteTo == req[roipool::kData]) {
         grad_in = 0.0f;
       }
-      ROIPoolBackwardAcc(grad_in, grad_out, bbox, max_idx, param_.spatial_scale);
+      ROIPoolBackwardAcc(grad_in, grad_out, bbox, max_idx, param_.spatial_scale, param_.pad_ratio);
     }
     if (kWriteTo == req[roipool::kBox]) {
       grad_roi = 0.0f;
