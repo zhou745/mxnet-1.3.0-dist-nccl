@@ -3,6 +3,7 @@ learning rate scheduler, which adaptive changes the learning rate based on the
 progress
 """
 import logging
+import math
 
 class LRScheduler(object):
     """Base class of a learning rate scheduler"""
@@ -133,3 +134,37 @@ class MultiFactorScheduler(LRScheduler):
             else:
                 return self.base_lr
         return self.base_lr
+class PolyScheduler(LRScheduler):
+    """Reduce learning rate in a poly rate
+    Assume the weight has been updated by n times, then the learning rate will
+    be
+    base_lr * (1 - iter / total_update) ^ power
+    Parameters
+    ----------
+    total_update: int
+        total number of weight updates
+    power: float
+        the rate of learning rate reduction
+    """
+    def __init__(self, total_update, power=0.9):
+        super(PolyScheduler, self).__init__()
+        assert isinstance(total_update, int)
+        if power > 1.0 or power < 0.0:
+                        raise ValueError("Power must be no more than 1 and larger than 0.")
+        self.power = power
+        self.total_update = total_update
+
+    def __call__(self, num_update):
+        """
+        Call to schedule current learning rate
+        Parameters
+        ----------
+        num_update: int
+            the maximal number of updates applied to a weight.
+        """
+
+        # NOTE: use while rather than if  (for continuing training via load_epoch)
+        return self.base_lr * math.pow(1 - num_update / self.total_update, self.power)
+
+
+
