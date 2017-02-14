@@ -164,7 +164,7 @@ class PolyScheduler(LRScheduler):
         """
 
         # NOTE: use while rather than if  (for continuing training via load_epoch)
-        return self.base_lr * math.pow(1 - num_update / self.total_update, self.power)
+        return self.base_lr * math.pow(1 - float(num_update) / self.total_update, self.power)
 
 
 
