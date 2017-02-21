@@ -37,16 +37,16 @@ with MXNet commit `0a03417`
 
 | Batch | Alexnet | VGG | Inception-BN | Inception-v3 | Resnet 50 | Resnet 152 |
 | --- | --- | --- | --- | --- | --- | --- |
-|   1 |  98.44 | 24.66 |  27.43 |  11.91 |  38.74 | 14.95 |
-|   2 | 121.67 | 27.07 |  24.78 |  11.61 |  44.27 | 15.62 |
-|   4 | 254.39 | 38.51 |  28.76 |  12.86 |  40.88 | 19.01 |
-|   8 | 237.73 | 36.97 |  25.57 |  12.68 |  43.00 | 16.11 |
-|  16 | 280.82 | 40.00 |  20.85 |  11.77 |  55.00 | 16.93 |
-|  32 | 285.41 | 44.40 |  31.03 |  12.45 |  55.70 | 17.02 |
+|   1 |  122.21 | 34.23 |  99.24 |  52.16 |  46.03 | 20.11 |
+|   2 | 224.83 | 51.02 |  138.88 |  66.76 |  52.27 | 24.82 |
+|   4 | 295.87 | 65.88 |  185.46 |  76.70 |  67.45 | 28.16 |
+|   8 | 389.08 | 77.78 |  212.96 |  84.00 |  69.26 | 29.70 |
+|  16 | 519.87 | 85.08 |  222.81 |  85.10 |  68.94 | 29.11 |
+|  32 | 626.25 | 87.63 |  221.66 |  84.36 |  67.69 | 28.70 |
 
 ## Other CPU
 
-if using cpus(not just intel cpus, such as ARMs), NNAPCK will also imporve the running performance with 2x~7x, plese check [nnpack.md](./nnpack.md) for details.
+If using CPUs (not just Intel CPUs -- ARMs also), NNPACK will also improve the running performance with 2x~7x, please check [nnpack.md](./nnpack.md) for details.
 
 ## Nvidia GPU
 
@@ -147,7 +147,7 @@ details.
 
 Besides, we can use
 [tools/bandwidth](https://github.com/dmlc/mxnet/tree/master/tools/bandwidth) to
-find the communication cost per batch. A ideal situation is the cost is less
+find the communication cost per batch. An ideal situation is the cost is less
 than the time to compute a batch. We can
 
 - Explore different `--kv-store` options to reduce the cost
@@ -158,22 +158,22 @@ than the time to compute a batch. We can
 For the input data, mind the following:
 
 * Data format. If you are using the `rec` format, then everything should be fine.
-* Decoding. By default, MXNet uses 4 CPU threads for decoding images. This is often sufficient to decode more than 1K images per second. If  you are using a low-end CPU oryour GPUs are very powerful, you can increase the number of threads.
+* Decoding. By default, MXNet uses 4 CPU threads for decoding images. This is often sufficient to decode more than 1K images per second. If  you are using a low-end CPU or your GPUs are very powerful, you can increase the number of threads.
 * Storage location. Any local or distributed file system (HDFS, Amazon S3) should be fine. If multiple devices read the data from the network shared file system (NFS) at the same time, problems might occur.
 * Use a large batch size. We often choose the largest one that fits into GPU memory. A value that's too large can slow down convergence. For example, the safe batch size for CIFAR 10 is approximately 200, while for ImageNet 1K, the batch size can exceed 1K.
 
 ## Profiler
 
-As of v0.9.1 (with the NNVM merge) MXNet has a built-in profiler that gives detailed information about 
-execution time at the symbol level. 
-This feature compliments general profiling tools like nvprof and gprof by summarizing at the operator 
-level, instead of function, kernel, or instruction level.
+As of v0.9.1 (with the NNVM merge) MXNet has a built-in profiler that gives detailed information about
+execution time at the symbol level.
+This feature compliments general profiling tools like nvprof and gprof by summarizing at the operator
+level, instead of a function, kernel, or instruction level.
 
 To be able to use the profiler, you must compile MXNet with the `USE_PROFILER=1` flag in `config.mk`.
-Once enabled, the profiler can be enabled with an [environment variable](http://mxnet.io/how_to/env_var.html#control-the-profiler) for an entire program run, or 
+Once enabled, the profiler can be enabled with an [environment variable](http://mxnet.io/how_to/env_var.html#control-the-profiler) for an entire program run, or
 programmatically for just part of a run.
 See [example/profiler](https://github.com/dmlc/mxnet/tree/master/example/profiler) for complete examples
-of how to use the profiler in code, but briefly the python code looks like
+of how to use the profiler in code, but briefly, the python code looks like
 
 ```
     mx.profiler.profiler_set_config(mode='all', filename='profile_output.json')
@@ -184,7 +184,7 @@ of how to use the profiler in code, but briefly the python code looks like
     mx.profiler.profiler_set_state('stop')
 ```
 
-The `mode` parameter can be set to 
+The `mode` parameter can be set to
 
 * `symbolic` to only include symbolic operations
 * `all` to include all operations
