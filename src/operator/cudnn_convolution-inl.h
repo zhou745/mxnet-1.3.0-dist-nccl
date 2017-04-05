@@ -12,74 +12,12 @@
 #include <mutex>
 #include <string>
 #include "./convolution-inl.h"
+#include "./cudnn_algoreg-inl.h"
 #include "../common/cuda_utils.h"
 
 namespace mxnet {
 namespace op {
 #if MXNET_USE_CUDNN == 1
-
-class CuDNNAlgoReg {
- public:
-  std::string GetKey(const ConvolutionParam& param,
-                     const std::vector<TShape>& in_shape,
-                     const std::vector<TShape>& out_shape) {
-    std::ostringstream oss;
-    for (auto& i : in_shape) oss << i << ";";
-    for (auto& i : out_shape) oss << i << ";";
-    auto dict = param.__DICT__();
-    for (auto& k : dict) oss << k.first << "=" << k.second << ";";
-    return oss.str();
-  }
-
-  bool Find(std::string key,
-            cudnnConvolutionFwdAlgo_t *fwd,
-            cudnnConvolutionBwdDataAlgo_t *bwd,
-            cudnnConvolutionBwdFilterAlgo_t *flt) {
-    std::lock_guard<std::mutex> guard(lock_);
-    auto i = reg_.find(key);
-    if (i != reg_.end()) {
-      *fwd = i->second.fwd;
-      *bwd = i->second.bwd;
-      *flt = i->second.flt;
-      return true;
-    }
-    return false;
-  }
-
-  void Register(std::string key,
-                cudnnConvolutionFwdAlgo_t fwd,
-                cudnnConvolutionBwdDataAlgo_t bwd,
-                cudnnConvolutionBwdFilterAlgo_t flt) {
-    std::lock_guard<std::mutex> guard(lock_);
-    if (reg_.size() % 50 == 0) {
-      LOG(INFO)
-        << "Running performance tests to find the best convolution algorithm, "
-           "this can take a while... (setting env variable "
-           "MXNET_CUDNN_AUTOTUNE_DEFAULT to 0 to disable)";
-      if (reg_.size() >= 1000) {
-        LOG(INFO)
-          << "If you see this message in the middle of training, you are "
-             "probably using bucketing. Consider setting env variable "
-             "MXNET_CUDNN_AUTOTUNE_DEFAULT to 0 to disable cudnn tuning.";
-      }
-    }
-    reg_[key].fwd = fwd;
-    reg_[key].bwd = bwd;
-    reg_[key].flt = flt;
-  }
-
-  static CuDNNAlgoReg* Get();
-
- private:
-  struct CudnnAlgorithms {
-    cudnnConvolutionFwdAlgo_t fwd;
-    cudnnConvolutionBwdDataAlgo_t bwd;
-    cudnnConvolutionBwdFilterAlgo_t flt;
-  };
-
-  std::mutex lock_;
-  std::unordered_map<std::string, CudnnAlgorithms> reg_;
-};
 
 template<typename DType>
 class CuDNNConvolutionOp : public Operator {
@@ -134,7 +72,7 @@ class CuDNNConvolutionOp : public Operator {
     DType *wmat_ptr = NULL;
     DType *out_ptr = NULL;
     CHECK_EQ(in_data.size(), expected);
-    CHECK_EQ(out_data.size(), 1);
+    CHECK_EQ(out_data.size(), 1U);
     Stream<gpu> *s = ctx.get_stream<gpu>();
     GetTempSize(ctx);
     Tensor<gpu, 1, DType> workspace =
@@ -219,7 +157,7 @@ class CuDNNConvolutionOp : public Operator {
     DType *gwmat_ptr = NULL;
     DType *data_ptr = NULL;
     DType *gdata_ptr = NULL;
-    CHECK_EQ(out_grad.size(), 1);
+    CHECK_EQ(out_grad.size(), 1U);
     CHECK(in_data.size() == expected && in_grad.size() == expected);
     Stream<gpu> *s = ctx.get_stream<gpu>();
     if (param_.kernel.ndim() == 2) {
@@ -331,7 +269,7 @@ class CuDNNConvolutionOp : public Operator {
     using namespace mshadow;
     size_t expected = param_.no_bias ? 2 : 3;
     CHECK_EQ(in_shape.size(), expected);
-    CHECK_EQ(out_shape.size(), 1);
+    CHECK_EQ(out_shape.size(), 1U);
     CHECK_EQ(cudnnCreateTensorDescriptor(&in_desc_), CUDNN_STATUS_SUCCESS);
     CHECK_EQ(cudnnCreateTensorDescriptor(&out_desc_), CUDNN_STATUS_SUCCESS);
     CHECK_EQ(cudnnCreateTensorDescriptor(&bias_desc_), CUDNN_STATUS_SUCCESS);

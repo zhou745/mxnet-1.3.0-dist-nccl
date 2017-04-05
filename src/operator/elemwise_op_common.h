@@ -53,8 +53,8 @@ template<int n_in, int n_out>
 inline bool ElemwiseShape(const nnvm::NodeAttrs& attrs,
                           std::vector<TShape> *in_attrs,
                           std::vector<TShape> *out_attrs) {
-  CHECK_EQ(in_attrs->size(), n_in) << " in operator " << attrs.name;
-  CHECK_EQ(out_attrs->size(), n_out) << " in operator " << attrs.name;
+  CHECK_EQ(in_attrs->size(), static_cast<size_t>(n_in)) << " in operator " << attrs.name;
+  CHECK_EQ(out_attrs->size(), static_cast<size_t>(n_out)) << " in operator " << attrs.name;
   return ElemwiseAttr<TShape, shape_is_none, shape_assign, true>(
     attrs, in_attrs, out_attrs, TShape());
 }
@@ -63,8 +63,8 @@ template<int n_in, int n_out>
 inline bool ElemwiseType(const nnvm::NodeAttrs& attrs,
                          std::vector<int> *in_attrs,
                          std::vector<int> *out_attrs) {
-  CHECK_EQ(in_attrs->size(), n_in) << " in operator " << attrs.name;
-  CHECK_EQ(out_attrs->size(), n_out) << " in operator " << attrs.name;
+  CHECK_EQ(in_attrs->size(), static_cast<size_t>(n_in)) << " in operator " << attrs.name;
+  CHECK_EQ(out_attrs->size(), static_cast<size_t>(n_out)) << " in operator " << attrs.name;
   return ElemwiseAttr<int, type_is_none, type_assign, true>(
     attrs, in_attrs, out_attrs, -1);
 }
@@ -74,11 +74,7 @@ struct ElemwiseGradUseIn {
   const char *op_name;
   std::vector<nnvm::NodeEntry> operator()(const nnvm::NodePtr& n,
                                           const std::vector<nnvm::NodeEntry>& ograds) {
-    std::vector<nnvm::NodeEntry> heads(ograds.begin(), ograds.end());
-    for (auto& h : n->inputs) {
-      heads.push_back(h);
-    }
-    return MakeGradNode(op_name, n, heads, n->attrs.dict);
+    return MakeNonlossGradNode(op_name, n, ograds, n->inputs, n->attrs.dict);
   }
 };
 
@@ -87,12 +83,12 @@ struct ElemwiseGradUseOut {
   const char *op_name;
   std::vector<nnvm::NodeEntry> operator()(const nnvm::NodePtr& n,
                                           const std::vector<nnvm::NodeEntry>& ograds) {
-    std::vector<nnvm::NodeEntry> heads(ograds.begin(), ograds.end());
+    std::vector<nnvm::NodeEntry> heads;
     index_t n_out = n->num_outputs();
     for (index_t i = 0; i < n_out; ++i) {
       heads.emplace_back(nnvm::NodeEntry{n, i, 0});
     }
-    return MakeGradNode(op_name, n, heads, n->attrs.dict);
+    return MakeNonlossGradNode(op_name, n, ograds, heads, n->attrs.dict);
   }
 };
 
@@ -101,7 +97,7 @@ struct ElemwiseGradUseNone {
   const char *op_name;
   std::vector<nnvm::NodeEntry> operator()(const nnvm::NodePtr& n,
                                           const std::vector<nnvm::NodeEntry>& ograds) {
-    return MakeGradNode(op_name, n, ograds, n->attrs.dict);
+    return MakeNonlossGradNode(op_name, n, ograds, {}, n->attrs.dict);
   }
 };
 
