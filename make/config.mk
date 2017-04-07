@@ -59,7 +59,7 @@ USE_CUDNN = 0
 CUDA_ARCH := -gencode arch=compute_30,code=sm_30 \
 		-gencode arch=compute_35,code=sm_35 \
 		-gencode arch=compute_50,code=sm_50 \
-		-gencode arch=compute_50,code=compute_50
+		-gencode arch=compute_50,code=compute_50 \
 		-gencode arch=compute_62,code=compute_62
 
 # whether use cuda runtime compiling for writing kernels in native language (i.e. Python)
