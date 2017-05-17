@@ -98,7 +98,7 @@ class MultiLogisticOp : public Operator {
     Tensor<xpu, 2> grad = in_grad[kData].FlatTo2D<xpu, real_t>(s);
 
     grad = out - label;
-    grad = grad * label * param_.weight + grad * (1 - label);
+    grad = (param_.grad_scale) * (grad * label * param_.weight + grad * (1 - label));
   }
 
  private:
