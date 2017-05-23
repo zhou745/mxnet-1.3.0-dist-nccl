@@ -44,7 +44,18 @@ NNVM_REGISTER_OP(_arange)
 .add_arguments(RangeParam::__FIELDS__());
 
 NNVM_REGISTER_OP(zeros_like)
-.MXNET_DESCRIBE("Return an array of zeros with the same shape and type as the input array.")
+.describe(R"code(Return an array of zeros with the same shape and type
+as the input array.
+
+Examples::
+
+  x = [[ 1.,  1.,  1.],
+       [ 1.,  1.,  1.]]
+
+  zeros_like(x) = [[ 0.,  0.,  0.],
+                   [ 0.,  0.,  0.]]
+
+)code")
 .set_num_inputs(1)
 .set_num_outputs(1)
 .set_attr<nnvm::FInferShape>("FInferShape", ElemwiseShape<1, 1>)
@@ -53,10 +64,21 @@ NNVM_REGISTER_OP(zeros_like)
     [](const NodeAttrs& attrs) { return std::vector<uint32_t>(1, 0); })
 .set_attr<FCompute>("FCompute<cpu>", FillCompute<cpu, 0>)
 .set_attr<nnvm::FGradient>("FGradient", MakeZeroGradNodes)
-.add_argument("data", "ndarray-or-symbol", "The input");
+.add_argument("data", "NDArray-or-Symbol", "The input");
 
 NNVM_REGISTER_OP(ones_like)
-.MXNET_DESCRIBE("Return an array of ones with the same shape and type as the input array.")
+.describe(R"code(Return an array of ones with the same shape and type
+as the input array.
+
+Examples::
+
+  x = [[ 0.,  0.,  0.],
+       [ 0.,  0.,  0.]]
+
+  ones_like(x) = [[ 1.,  1.,  1.],
+                  [ 1.,  1.,  1.]]
+
+)code")
 .set_num_inputs(1)
 .set_num_outputs(1)
 .set_attr<nnvm::FInferShape>("FInferShape", ElemwiseShape<1, 1>)
@@ -65,7 +87,7 @@ NNVM_REGISTER_OP(ones_like)
     [](const NodeAttrs& attrs) { return std::vector<uint32_t>(1, 0); })
 .set_attr<FCompute>("FCompute<cpu>", FillCompute<cpu, 1>)
 .set_attr<nnvm::FGradient>("FGradient", MakeZeroGradNodes)
-.add_argument("data", "ndarray-or-symbol", "The input");
+.add_argument("data", "NDArray-or-Symbol", "The input");
 
 }  // namespace op
 }  // namespace mxnet

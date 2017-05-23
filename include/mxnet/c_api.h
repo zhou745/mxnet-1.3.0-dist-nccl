@@ -193,6 +193,9 @@ MXNET_DLL int MXSetProfilerState(int state);
 /*! \brief Save profile and stop profiler */
 MXNET_DLL int MXDumpProfile();
 
+/*! \brief Set the number of OMP threads to use */
+MXNET_DLL int MXSetNumOMPThreads(int thread_num);
+
 //-------------------------------------
 // Part 1: NDArray creation and deletion
 //-------------------------------------
@@ -520,7 +523,31 @@ MXNET_DLL int MXImperativeInvoke(AtomicSymbolCreator creator,
                                  int num_params,
                                  const char **param_keys,
                                  const char **param_vals);
-
+/*!
+ * \brief set whether to record operator for autograd
+ * \param is_train 1 when training, 0 when testing
+ * \param prev returns the previous status before this set.
+ * \return 0 when success, -1 when failure happens
+ */
+MXNET_DLL int MXAutogradSetIsTraining(int is_training, int* prev);
+/*!
+ * \brief mark NDArrays as variables to compute gradient for autograd
+ * \param num_var number of variable NDArrays
+ * \param var_handles variable NDArrays
+ * \return 0 when success, -1 when failure happens
+ */
+MXNET_DLL int MXAutogradMarkVariables(mx_uint num_var,
+                                      NDArrayHandle *var_handles,
+                                      mx_uint *reqs_array,
+                                      NDArrayHandle *grad_handles);
+/*!
+ * \brief compute the gradient of outputs w.r.t variabels
+ * \param num_output number of output NDArray
+ * \param output_handles output NDArrays
+ * \return 0 when success, -1 when failure happens
+ */
+MXNET_DLL int MXAutogradComputeGradient(mx_uint num_output,
+                                        NDArrayHandle* output_handles);
 //--------------------------------------------
 // Part 3: symbolic configuration generation
 //--------------------------------------------

@@ -27,6 +27,12 @@ else:
     numeric_types = (float, int, long, np.float32, np.int32)
     py_str = lambda x: x
 
+class _NullType(object):
+    """Placeholder for arguments"""
+    def __repr__(self):
+        return '_Null'
+
+_Null = _NullType()
 
 class MXNetError(Exception):
     """Error that will be throwed by all mxnet functions."""
@@ -90,6 +96,12 @@ if sys.version_info[0] < 3:
         -------
         str : c_char_p
             A char pointer that can be passed to C API.
+
+        Examples
+        --------
+        >>> x = mx.base.c_str("Hello, World")
+        >>> print x.value
+        Hello, World
         """
         return ctypes.c_char_p(string)
 else:
@@ -105,6 +117,12 @@ else:
         -------
         str : c_char_p
             A char pointer that can be passed to C API.
+
+        Examples
+        --------
+        >>> x = mx.base.c_str("Hello, World")
+        >>> print x.value
+        Hello, World
         """
         return ctypes.c_char_p(string.encode('utf-8'))
 
@@ -115,7 +133,7 @@ def c_array(ctype, values):
     Parameters
     ----------
     ctype : ctypes data type
-        Data type of the array we want to convert to.
+        Data type of the array we want to convert to, such as mx_float.
 
     values : tuple or list
         Data content.
@@ -124,6 +142,14 @@ def c_array(ctype, values):
     -------
     out : ctypes array
         Created ctypes array.
+
+    Examples
+    --------
+    >>> x = mx.base.c_array(mx.base.mx_float, [1, 2, 3])
+    >>> print len(x)
+    3
+    >>> x[1]
+    2.0
     """
     return (ctype * len(values))(*values)
 
@@ -161,7 +187,7 @@ def ctypes2numpy_shared(cptr, shape):
         pointer to the memory region
 
     shape : tuple
-        Shape of target NDArray.
+        Shape of target `NDArray`.
 
     Returns
     -------

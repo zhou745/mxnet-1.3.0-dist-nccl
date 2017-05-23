@@ -49,7 +49,7 @@ def make(docker_type, make_flag) {
       sh "${docker_run} ${docker_type} make ${make_flag}"
     } catch (exc) {
       echo 'Incremental compilation failed. Fall back to build from scratch'
-      sh "${docker_run} ${docker_type} make clean"
+      sh "${docker_run} ${docker_type} sudo make clean"
       sh "${docker_run} ${docker_type} make ${make_flag}"
     }
   }
@@ -80,7 +80,9 @@ stage('Build') {
       ws('workspace/build-cpu') {
         init_git()
         def flag = """ \
+DEV=1                         \
 USE_PROFILER=1                \
+USE_CPP_PACKAGE=1             \
 USE_BLAS=openblas             \
 -j\$(nproc)
 """
@@ -94,15 +96,18 @@ USE_BLAS=openblas             \
       ws('workspace/build-gpu') {
         init_git()
         def flag = """ \
+DEV=1                         \
 USE_PROFILER=1                \
 USE_BLAS=openblas             \
 USE_CUDA=1                    \
 USE_CUDA_PATH=/usr/local/cuda \
 USE_CUDNN=1                   \
+USE_CPP_PACKAGE=1             \
 -j\$(nproc)
 """
         make('gpu', flag)
         pack_lib('gpu')
+        stash includes: 'build/cpp-package/example/test_score', name: 'cpp_test_score'
       }
     }
   },
@@ -119,6 +124,7 @@ USE_CUDNN=1                   \
       ws('workspace/build-mklml') {
         init_git()
         def flag = """ \
+DEV=1                         \
 USE_PROFILER=1                \
 USE_BLAS=openblas             \
 USE_MKL2017=1                 \
@@ -126,6 +132,7 @@ USE_MKL2017_EXPERIMENTAL=1    \
 USE_CUDA=1                    \
 USE_CUDA_PATH=/usr/local/cuda \
 USE_CUDNN=1                   \
+USE_CPP_PACKAGE=1             \
 -j\$(nproc)
 """
         make('mklml_gpu', flag)
@@ -145,7 +152,7 @@ cmake -G \"Visual Studio 14 2015 Win64\" -DUSE_CUDA=0 -DUSE_CUDNN=0 -DUSE_NVRTC=
 
           bat '''rmdir /s/q pkg_vc14_gpu
 mkdir pkg_vc14_cpu\\lib
-mkdir pkg_vc14_cpu\\python 
+mkdir pkg_vc14_cpu\\python
 mkdir pkg_vc14_cpu\\include
 mkdir pkg_vc14_cpu\\build
 copy build_vc14_cpu\\Release\\libmxnet.lib pkg_vc14_cpu\\lib
@@ -175,7 +182,7 @@ cmake -G \"NMake Makefiles JOM\" -DUSE_CUDA=1 -DUSE_CUDNN=1 -DUSE_NVRTC=1 -DUSE_
              bat 'C:\\mxnet\\build_vc14_gpu.bat'
              bat '''rmdir /s/q pkg_vc14_gpu
 mkdir pkg_vc14_gpu\\lib
-mkdir pkg_vc14_gpu\\python 
+mkdir pkg_vc14_gpu\\python
 mkdir pkg_vc14_gpu\\include
 mkdir pkg_vc14_gpu\\build
 copy build_vc14_gpu\\libmxnet.lib pkg_vc14_gpu\\lib
@@ -200,6 +207,7 @@ def python_ut(docker_type) {
   timeout(time: max_time, unit: 'MINUTES') {
     sh "${docker_run} ${docker_type} PYTHONPATH=./python/ nosetests --with-timer --verbose tests/python/unittest"
     sh "${docker_run} ${docker_type} PYTHONPATH=./python/ nosetests-3.4 --with-timer --verbose tests/python/unittest"
+    sh "${docker_run} ${docker_type} PYTHONPATH=./python/ nosetests --with-timer --verbose tests/python/train"
   }
 }
 
@@ -315,6 +323,18 @@ stage('Integration Test') {
         unpack_lib('gpu')
         timeout(time: max_time, unit: 'MINUTES') {
           sh "${docker_run} caffe_gpu PYTHONPATH=/caffe/python:./python python tools/caffe_converter/test_converter.py"
+        }
+      }
+    }
+  },
+  'cpp-package': {
+    node('GPU' && 'linux') {
+      ws('workspace/it-cpp-package') {
+        init_git()
+        unpack_lib('gpu')
+        unstash 'cpp_test_score'
+        timeout(time: max_time, unit: 'MINUTES') {
+          sh "${docker_run} gpu cpp-package/tests/ci_test.sh"
         }
       }
     }
