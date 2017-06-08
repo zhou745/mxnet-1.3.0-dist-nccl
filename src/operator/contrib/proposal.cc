@@ -15,55 +15,58 @@ namespace op {
 namespace utils {
 
 // bbox prediction and clip to the image borders
-inline void BBoxTransformInv(const mshadow::Tensor<cpu, 2>& boxes,
+inline void BBoxTransformInv(const mshadow::Tensor<cpu, 3>& boxes,
                              const mshadow::Tensor<cpu, 4>& deltas,
                              const float im_height,
                              const float im_width,
                              const int real_height,
                              const int real_width,
-                             mshadow::Tensor<cpu, 2> *out_pred_boxes) {
+                             mshadow::Tensor<cpu, 3> *out_pred_boxes) {
   CHECK_GE(boxes.size(1), 4);
   CHECK_GE(out_pred_boxes->size(1), 4);
+  int nbatch = deltas.size(0);
   int anchors = deltas.size(1)/4;
   int heights = deltas.size(2);
   int widths = deltas.size(3);
 
-  for (int a = 0; a < anchors; ++a) {
-    for (int h = 0; h < heights; ++h) {
-      for (int w = 0; w < widths; ++w) {
-        index_t index = h * (widths * anchors) + w * (anchors) + a;
-        float width = boxes[index][2] - boxes[index][0] + 1.0;
-        float height = boxes[index][3] - boxes[index][1] + 1.0;
-        float ctr_x = boxes[index][0] + 0.5 * (width - 1.0);
-        float ctr_y = boxes[index][1] + 0.5 * (height - 1.0);
+  for (int n = 0; n < nbatch; ++n) {
+    for (int a = 0; a < anchors; ++a) {
+      for (int h = 0; h < heights; ++h) {
+        for (int w = 0; w < widths; ++w) {
+          index_t index = h * (widths * anchors) + w * (anchors) + a;
+          float width = boxes[n][index][2] - boxes[n][index][0] + 1.0;
+          float height = boxes[n][index][3] - boxes[n][index][1] + 1.0;
+          float ctr_x = boxes[n][index][0] + 0.5 * (width - 1.0);
+          float ctr_y = boxes[n][index][1] + 0.5 * (height - 1.0);
 
-        float dx = deltas[0][a*4 + 0][h][w];
-        float dy = deltas[0][a*4 + 1][h][w];
-        float dw = deltas[0][a*4 + 2][h][w];
-        float dh = deltas[0][a*4 + 3][h][w];
+          float dx = deltas[n][a*4 + 0][h][w];
+          float dy = deltas[n][a*4 + 1][h][w];
+          float dw = deltas[n][a*4 + 2][h][w];
+          float dh = deltas[n][a*4 + 3][h][w];
 
-        float pred_ctr_x = dx * width + ctr_x;
-        float pred_ctr_y = dy * height + ctr_y;
-        float pred_w = exp(dw) * width;
-        float pred_h = exp(dh) * height;
+          float pred_ctr_x = dx * width + ctr_x;
+          float pred_ctr_y = dy * height + ctr_y;
+          float pred_w = exp(dw) * width;
+          float pred_h = exp(dh) * height;
 
-        float pred_x1 = pred_ctr_x - 0.5 * (pred_w - 1.0);
-        float pred_y1 = pred_ctr_y - 0.5 * (pred_h - 1.0);
-        float pred_x2 = pred_ctr_x + 0.5 * (pred_w - 1.0);
-        float pred_y2 = pred_ctr_y + 0.5 * (pred_h - 1.0);
+          float pred_x1 = pred_ctr_x - 0.5 * (pred_w - 1.0);
+          float pred_y1 = pred_ctr_y - 0.5 * (pred_h - 1.0);
+          float pred_x2 = pred_ctr_x + 0.5 * (pred_w - 1.0);
+          float pred_y2 = pred_ctr_y + 0.5 * (pred_h - 1.0);
 
-        pred_x1 = std::max(std::min(pred_x1, im_width - 1.0f), 0.0f);
-        pred_y1 = std::max(std::min(pred_y1, im_height - 1.0f), 0.0f);
-        pred_x2 = std::max(std::min(pred_x2, im_width - 1.0f), 0.0f);
-        pred_y2 = std::max(std::min(pred_y2, im_height - 1.0f), 0.0f);
+          pred_x1 = std::max(std::min(pred_x1, im_width - 1.0f), 0.0f);
+          pred_y1 = std::max(std::min(pred_y1, im_height - 1.0f), 0.0f);
+          pred_x2 = std::max(std::min(pred_x2, im_width - 1.0f), 0.0f);
+          pred_y2 = std::max(std::min(pred_y2, im_height - 1.0f), 0.0f);
 
-        (*out_pred_boxes)[index][0] = pred_x1;
-        (*out_pred_boxes)[index][1] = pred_y1;
-        (*out_pred_boxes)[index][2] = pred_x2;
-        (*out_pred_boxes)[index][3] = pred_y2;
+          (*out_pred_boxes)[n][index][0] = pred_x1;
+          (*out_pred_boxes)[n][index][1] = pred_y1;
+          (*out_pred_boxes)[n][index][2] = pred_x2;
+          (*out_pred_boxes)[n][index][3] = pred_y2;
 
-        if (h >= real_height || w >= real_width) {
-          (*out_pred_boxes)[index][4] = -1.0;
+          if (h >= real_height || w >= real_width) {
+            (*out_pred_boxes)[n][index][4] = -1.0;
+          }
         }
       }
     }
@@ -71,50 +74,52 @@ inline void BBoxTransformInv(const mshadow::Tensor<cpu, 2>& boxes,
 }
 
 // iou prediction and clip to the image border
-inline void IoUTransformInv(const mshadow::Tensor<cpu, 2>& boxes,
+inline void IoUTransformInv(const mshadow::Tensor<cpu, 3>& boxes,
                             const mshadow::Tensor<cpu, 4>& deltas,
                             const float im_height,
                             const float im_width,
                             const int real_height,
                             const int real_width,
-                            mshadow::Tensor<cpu, 2> *out_pred_boxes) {
-  CHECK_GE(boxes.size(1), 4);
-  CHECK_GE(out_pred_boxes->size(1), 4);
+                            mshadow::Tensor<cpu, 3> *out_pred_boxes) {
+  CHECK_GE(boxes.size(2), 4);
+  CHECK_GE(out_pred_boxes->size(2), 4);
+  int nbatch = deltas.size(0);
   int anchors = deltas.size(1)/4;
   int heights = deltas.size(2);
   int widths = deltas.size(3);
+  for (int n = 0; n < nbatch; ++n){
+    for (int a = 0; a < anchors; ++a) {
+      for (int h = 0; h < heights; ++h) {
+        for (int w = 0; w < widths; ++w) {
+          index_t index = h * (widths * anchors) + w * (anchors) + a;
+          float x1 = boxes[n][index][0];
+          float y1 = boxes[n][index][1];
+          float x2 = boxes[n][index][2];
+          float y2 = boxes[n][index][3];
 
-  for (int a = 0; a < anchors; ++a) {
-    for (int h = 0; h < heights; ++h) {
-      for (int w = 0; w < widths; ++w) {
-        index_t index = h * (widths * anchors) + w * (anchors) + a;
-        float x1 = boxes[index][0];
-        float y1 = boxes[index][1];
-        float x2 = boxes[index][2];
-        float y2 = boxes[index][3];
+          float dx1 = deltas[n][a * 4 + 0][h][w];
+          float dy1 = deltas[n][a * 4 + 1][h][w];
+          float dx2 = deltas[n][a * 4 + 2][h][w];
+          float dy2 = deltas[n][a * 4 + 3][h][w];
 
-        float dx1 = deltas[0][a * 4 + 0][h][w];
-        float dy1 = deltas[0][a * 4 + 1][h][w];
-        float dx2 = deltas[0][a * 4 + 2][h][w];
-        float dy2 = deltas[0][a * 4 + 3][h][w];
+          float pred_x1 = x1 + dx1;
+          float pred_y1 = y1 + dy1;
+          float pred_x2 = x2 + dx2;
+          float pred_y2 = y2 + dy2;
 
-        float pred_x1 = x1 + dx1;
-        float pred_y1 = y1 + dy1;
-        float pred_x2 = x2 + dx2;
-        float pred_y2 = y2 + dy2;
+          pred_x1 = std::max(std::min(pred_x1, im_width - 1.0f), 0.0f);
+          pred_y1 = std::max(std::min(pred_y1, im_height - 1.0f), 0.0f);
+          pred_x2 = std::max(std::min(pred_x2, im_width - 1.0f), 0.0f);
+          pred_y2 = std::max(std::min(pred_y2, im_height - 1.0f), 0.0f);
 
-        pred_x1 = std::max(std::min(pred_x1, im_width - 1.0f), 0.0f);
-        pred_y1 = std::max(std::min(pred_y1, im_height - 1.0f), 0.0f);
-        pred_x2 = std::max(std::min(pred_x2, im_width - 1.0f), 0.0f);
-        pred_y2 = std::max(std::min(pred_y2, im_height - 1.0f), 0.0f);
+          (*out_pred_boxes)[n][index][0] = pred_x1;
+          (*out_pred_boxes)[n][index][1] = pred_y1;
+          (*out_pred_boxes)[n][index][2] = pred_x2;
+          (*out_pred_boxes)[n][index][3] = pred_y2;
 
-        (*out_pred_boxes)[index][0] = pred_x1;
-        (*out_pred_boxes)[index][1] = pred_y1;
-        (*out_pred_boxes)[index][2] = pred_x2;
-        (*out_pred_boxes)[index][3] = pred_y2;
-
-        if (h >= real_height || w >= real_width) {
-          (*out_pred_boxes)[index][4] = -1.0f;
+          if (h >= real_height || w >= real_width) {
+            (*out_pred_boxes)[n][index][4] = -1.0f;
+          }
         }
       }
     }
@@ -123,17 +128,19 @@ inline void IoUTransformInv(const mshadow::Tensor<cpu, 2>& boxes,
 
 // filter box by set confidence to zero
 // * height or width < rpn_min_size
-inline void FilterBox(mshadow::Tensor<cpu, 2> *dets,
+inline void FilterBox(mshadow::Tensor<cpu, 3> *dets,
                       const float min_size) {
-  for (index_t i = 0; i < dets->size(0); i++) {
-    float iw = (*dets)[i][2] - (*dets)[i][0] + 1.0f;
-    float ih = (*dets)[i][3] - (*dets)[i][1] + 1.0f;
-    if (iw < min_size || ih < min_size) {
-      (*dets)[i][0] -= min_size / 2;
-      (*dets)[i][1] -= min_size / 2;
-      (*dets)[i][2] += min_size / 2;
-      (*dets)[i][3] += min_size / 2;
-      (*dets)[i][4] = -1.0f;
+  for (index_t n = 0; n < dets->size(0); n++) {
+    for (index_t i = 0; i < dets->size(1); i++) {
+      float iw = (*dets)[n][i][2] - (*dets)[n][i][0] + 1.0f;
+      float ih = (*dets)[n][i][3] - (*dets)[n][i][1] + 1.0f;
+      if (iw < min_size || ih < min_size) {
+        (*dets)[n][i][0] -= min_size / 2;
+        (*dets)[n][i][1] -= min_size / 2;
+        (*dets)[n][i][2] += min_size / 2;
+        (*dets)[n][i][3] += min_size / 2;
+        (*dets)[n][i][4] = -1.0f;
+      }
     }
   }
 }
@@ -160,12 +167,14 @@ struct ReverseArgsortCompl {
 };
 
 // copy score and init order
-inline void CopyScore(const mshadow::Tensor<cpu, 2>& dets,
-                      mshadow::Tensor<cpu, 1> *score,
-                      mshadow::Tensor<cpu, 1> *order) {
-  for (index_t i = 0; i < dets.size(0); i++) {
-    (*score)[i] = dets[i][4];
-    (*order)[i] = i;
+inline void CopyScore(const mshadow::Tensor<cpu, 3>& dets,
+                      mshadow::Tensor<cpu, 2> *score,
+                      mshadow::Tensor<cpu, 2> *order) {
+  for (index_t n = 0; n < dets.size(0); n++) {
+    for (index_t i = 0; i < dets.size(1); i++) {
+      (*score)[n][i] = dets[n][i][4];
+      (*order)[n][i] = i;
+    }
   }
 }
 
@@ -270,25 +279,24 @@ class ProposalOp : public Operator{
     CHECK_EQ(out_data.size(), 2);
     CHECK_GT(req.size(), 1);
     CHECK_EQ(req[proposal::kOut], kWriteTo);
-    CHECK_EQ(in_data[proposal::kClsProb].shape_[0], 1)
-      << "Sorry, multiple images each device is not implemented.";
 
     Stream<xpu> *s = ctx.get_stream<xpu>();
 
-    Shape<4> scores_shape = Shape4(in_data[proposal::kClsProb].shape_[0],
-                                   in_data[proposal::kClsProb].shape_[1] / 2,
-                                   in_data[proposal::kClsProb].shape_[2],
-                                   in_data[proposal::kClsProb].shape_[3]);
-    real_t* foreground_score_ptr = in_data[proposal::kClsProb].dptr<real_t>()
-                                    + scores_shape.Size();
-    Tensor<cpu, 4> scores = Tensor<cpu, 4>(foreground_score_ptr, scores_shape);
+    // Shape<3> fg_scores_shape = Shape3(in_data[proposal::kClsProb].shape_[1] / 2,
+    //                                   in_data[proposal::kClsProb].shape_[2],
+    //                                   in_data[proposal::kClsProb].shape_[3]);
+
+    // real_t* foreground_score_ptr = in_data[proposal::kClsProb].dptr<real_t>()
+    //                                 + fg_scores_shape.Size();
+    Tensor<xpu, 4> scores = in_data[proposal::kClsProb].get<cpu, 4, real_t>(s);
     Tensor<cpu, 4> bbox_deltas = in_data[proposal::kBBoxPred].get<cpu, 4, real_t>(s);
     Tensor<cpu, 2> im_info = in_data[proposal::kImInfo].get<cpu, 2, real_t>(s);
 
-    Tensor<cpu, 2> out = out_data[proposal::kOut].get<cpu, 2, real_t>(s);
-    Tensor<cpu, 2> out_score = out_data[proposal::kScore].get<cpu, 2, real_t>(s);
+    Tensor<cpu, 3> out = out_data[proposal::kOut].get<cpu, 3, real_t>(s);
+    Tensor<cpu, 3> out_score = out_data[proposal::kScore].get<cpu, 3, real_t>(s);
 
-    int num_anchors = in_data[proposal::kClsProb].shape_[1] / 2;
+    int nbatch = scores.size(0);
+    int num_anchors = scores.size(1) / 2;
     int height = scores.size(2);
     int width = scores.size(3);
     int count = num_anchors * height * width;
@@ -296,19 +304,19 @@ class ProposalOp : public Operator{
     rpn_pre_nms_top_n = std::min(rpn_pre_nms_top_n, count);
     int rpn_post_nms_top_n = std::min(param_.rpn_post_nms_top_n, rpn_pre_nms_top_n);
 
-    int workspace_size = count * 5 + 2 * count + rpn_pre_nms_top_n * 5 + 3 * rpn_pre_nms_top_n;
+    int workspace_size = nbatch * (count * 5 + 2 * count + rpn_pre_nms_top_n * 5 + 3 * rpn_pre_nms_top_n);
     Tensor<cpu, 1> workspace = ctx.requested[proposal::kTempResource].get_space<cpu>(
       Shape1(workspace_size), s);
     int start = 0;
-    Tensor<cpu, 2> workspace_proposals(workspace.dptr_ + start, Shape2(count, 5));
-    start += count * 5;
-    Tensor<cpu, 2> workspace_pre_nms(workspace.dptr_ + start, Shape2(2, count));
-    start += 2 * count;
-    Tensor<cpu, 2> workspace_ordered_proposals(workspace.dptr_ + start,
-                                               Shape2(rpn_pre_nms_top_n, 5));
-    start += rpn_pre_nms_top_n * 5;
-    Tensor<cpu, 2> workspace_nms(workspace.dptr_ + start, Shape2(3, rpn_pre_nms_top_n));
-    start += 3 * rpn_pre_nms_top_n;
+    Tensor<cpu, 3> workspace_proposals(workspace.dptr_ + start, Shape3(nbatch, count, 5));
+    start += nbatch * count * 5;
+    Tensor<cpu, 3> workspace_pre_nms(workspace.dptr_ + start, Shape3(2, nbatch, count));
+    start += nbatch * 2 * count;
+    Tensor<cpu, 3> workspace_ordered_proposals(workspace.dptr_ + start,
+                                               Shape3(nbatch, rpn_pre_nms_top_n, 5));
+    start += nbatch * rpn_pre_nms_top_n * 5;
+    Tensor<cpu, 3> workspace_nms(workspace.dptr_ + start, Shape3(3, nbatch, rpn_pre_nms_top_n));
+    start += nbatch * 3 * rpn_pre_nms_top_n;
     CHECK_EQ(workspace_size, start) << workspace_size << " " << start << std::endl;
 
     // Generate anchors
@@ -323,18 +331,22 @@ class ProposalOp : public Operator{
                            param_.ratios.info,
                            param_.scales.info,
                            &anchors);
-    std::memcpy(workspace_proposals.dptr_, &anchors[0], sizeof(float) * anchors.size());
+    for(int n = 0; n < nbatch; n++) {
+      std::memcpy(workspace_proposals.dptr_ + n * 5 * count, &anchors[0], sizeof(float) * anchors.size());
+    }
 
     // Enumerate all shifted anchors
-    for (index_t i = 0; i < num_anchors; ++i) {
-      for (index_t j = 0; j < height; ++j) {
-        for (index_t k = 0; k < width; ++k) {
-          index_t index = j * (width * num_anchors) + k * (num_anchors) + i;
-          workspace_proposals[index][0] = workspace_proposals[i][0] + k * param_.feature_stride;
-          workspace_proposals[index][1] = workspace_proposals[i][1] + j * param_.feature_stride;
-          workspace_proposals[index][2] = workspace_proposals[i][2] + k * param_.feature_stride;
-          workspace_proposals[index][3] = workspace_proposals[i][3] + j * param_.feature_stride;
-          workspace_proposals[index][4] = scores[0][i][j][k];
+    for (index_t n = 0; n < nbatch; ++n) {
+      for (index_t i = 0; i < num_anchors; ++i) {
+        for (index_t j = 0; j < height; ++j) {
+          for (index_t k = 0; k < width; ++k) {
+            index_t index = j * (width * num_anchors) + k * (num_anchors) + i;
+            workspace_proposals[n][index][0] = workspace_proposals[n][i][0] + k * param_.feature_stride;
+            workspace_proposals[n][index][1] = workspace_proposals[n][i][1] + j * param_.feature_stride;
+            workspace_proposals[n][index][2] = workspace_proposals[n][i][2] + k * param_.feature_stride;
+            workspace_proposals[n][index][3] = workspace_proposals[n][i][3] + j * param_.feature_stride;
+            workspace_proposals[n][index][4] = scores[n][i + width * height * num_anchors][j][k];
+          }
         }
       }
     }
@@ -354,58 +366,66 @@ class ProposalOp : public Operator{
     }
     utils::FilterBox(&workspace_proposals, param_.rpn_min_size * im_info[0][2]);
 
-    Tensor<cpu, 1> score = workspace_pre_nms[0];
-    Tensor<cpu, 1> order = workspace_pre_nms[1];
+    Tensor<cpu, 2> score = workspace_pre_nms[0];
+    Tensor<cpu, 2> order = workspace_pre_nms[1];
 
     utils::CopyScore(workspace_proposals,
                      &score,
                      &order);
-    utils::ReverseArgsort(score,
-                          &order);
-    utils::ReorderProposals(workspace_proposals,
-                            order,
-                            rpn_pre_nms_top_n,
-                            &workspace_ordered_proposals);
 
-    index_t out_size = 0;
-    Tensor<cpu, 1> area = workspace_nms[0];
-    Tensor<cpu, 1> suppressed = workspace_nms[1];
-    Tensor<cpu, 1> keep = workspace_nms[2];
-    suppressed = 0;  // surprised!
+    Tensor<cpu, 2> area = workspace_nms[0];
+    Tensor<cpu, 2> suppressed = workspace_nms[1];
+    Tensor<cpu, 2> keep = workspace_nms[2];
 
-    utils::NonMaximumSuppression(workspace_ordered_proposals,
-                                 param_.threshold,
-                                 rpn_post_nms_top_n,
-                                 &area,
-                                 &suppressed,
-                                 &keep,
-                                 &out_size);
+    for(int n = 0; n < nbatch; n++) {
+      Tensor<cpu, 1> cur_order = order[n];
+      Tensor<cpu, 1> cur_area = area[n];
+      Tensor<cpu, 1> cur_keep = keep[n];
+      Tensor<cpu, 1> cur_suppressed = suppressed[n];
+      Tensor<cpu, 2> cur_workspace_ordered_proposals = workspace_ordered_proposals[n];
+      utils::ReverseArgsort(score[n],
+                            &cur_order);
+      utils::ReorderProposals(workspace_proposals[n],
+                              cur_order,
+                              rpn_pre_nms_top_n,
+                              &cur_workspace_ordered_proposals);
+      index_t out_size = 0;
+      suppressed = 0;  // surprised!
 
-    // fill in output rois
-    for (index_t i = 0; i < out.size(0); ++i) {
-      // batch index 0
-      out[i][0] = 0;
-      if (i < out_size) {
-        index_t index = keep[i];
-        for (index_t j = 0; j < 4; ++j) {
-          out[i][j + 1] =  workspace_ordered_proposals[index][j];
-        }
-      } else {
-        index_t index = keep[i % out_size];
-        for (index_t j = 0; j < 4; ++j) {
-          out[i][j + 1] = workspace_ordered_proposals[index][j];
+      utils::NonMaximumSuppression(cur_workspace_ordered_proposals,
+                                   param_.threshold,
+                                   rpn_post_nms_top_n,
+                                   &cur_area,
+                                   &cur_suppressed,
+                                   &cur_keep,
+                                   &out_size);
+
+      // fill in output rois
+      for (index_t i = 0; i < out.size(1); ++i) {
+        // batch index 0
+        out[n][i][0] = 0;
+        if (i < out_size) {
+          index_t index = cur_keep[i];
+          for (index_t j = 0; j < 4; ++j) {
+            out[n][i][j + 1] =  cur_workspace_ordered_proposals[index][j];
+          }
+        } else {
+          index_t index = cur_keep[i % out_size];
+          for (index_t j = 0; j < 4; ++j) {
+            out[n][i][j + 1] = cur_workspace_ordered_proposals[index][j];
+          }
         }
       }
-    }
 
-    // fill in output score
-    for (index_t i = 0; i < out_score.size(0); i++) {
-      if (i < out_size) {
-        index_t index = keep[i];
-        out_score[i][0] = workspace_ordered_proposals[index][4];
-      } else {
-        index_t index = keep[i % out_size];
-        out_score[i][0] = workspace_ordered_proposals[index][4];
+      // fill in output score
+      for (index_t i = 0; i < out_score.size(1); i++) {
+        if (i < out_size) {
+          index_t index = cur_keep[i];
+          out_score[n][i][0] = cur_workspace_ordered_proposals[index][4];
+        } else {
+          index_t index = cur_keep[i % out_size];
+          out_score[n][i][0] = cur_workspace_ordered_proposals[index][4];
+        }
       }
     }
   }

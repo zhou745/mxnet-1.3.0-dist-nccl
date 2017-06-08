@@ -2,7 +2,7 @@
  * Copyright (c) 2015 by Contributors
  * \file proposal.cu
  * \brief Proposal Operator
- * \author Shaoqing Ren, Jian Guo
+ * \author Shaoqing Ren, Jian Guo, Pengfei Chen
 */
 #include <dmlc/logging.h>
 #include <dmlc/parameter.h>
@@ -344,12 +344,13 @@ __global__ void PrepareOutput(const int count,
                               const Dtype* dets,
                               const int* keep,
                               const int out_size,
+                              const int batchIdx,
                               Dtype* out,
                               Dtype* score) {
   for (int index = blockIdx.x * blockDim.x + threadIdx.x;
        index < count;
        index += blockDim.x * gridDim.x) {
-    out[index * 5] = 0;
+    out[index * 5] = batchIdx;
     if (index < out_size) {
       int keep_i = keep[index];
       for (int j = 0; j < 4; ++j) {
@@ -391,25 +392,22 @@ class ProposalGPUOp : public Operator{
     CHECK_EQ(out_data.size(), 2);
     CHECK_GT(req.size(), 1);
     CHECK_EQ(req[proposal::kOut], kWriteTo);
-    CHECK_EQ(in_data[proposal::kClsProb].shape_[0], 1)
-      << "Sorry, multiple images each device is not implemented.";
 
     Stream<xpu> *s = ctx.get_stream<xpu>();
 
-    Shape<4> fg_scores_shape = Shape4(in_data[proposal::kClsProb].shape_[0],
-                                      in_data[proposal::kClsProb].shape_[1] / 2,
+    Shape<3> fg_scores_shape = Shape3(in_data[proposal::kClsProb].shape_[1] / 2,
                                       in_data[proposal::kClsProb].shape_[2],
                                       in_data[proposal::kClsProb].shape_[3]);
-    real_t* foreground_score_ptr = in_data[proposal::kClsProb].dptr<real_t>()
-                                    + fg_scores_shape.Size();
-    Tensor<xpu, 4> scores = Tensor<xpu, 4>(foreground_score_ptr, fg_scores_shape);
+
+    Tensor<xpu, 4> scores = in_data[proposal::kClsProb].get<xpu, 4, real_t>(s);
     Tensor<xpu, 4> bbox_deltas = in_data[proposal::kBBoxPred].get<xpu, 4, real_t>(s);
     Tensor<xpu, 2> im_info = in_data[proposal::kImInfo].get<xpu, 2, real_t>(s);
 
-    Tensor<xpu, 2> out = out_data[proposal::kOut].get<xpu, 2, real_t>(s);
-    Tensor<xpu, 2> out_score = out_data[proposal::kScore].get<xpu, 2, real_t>(s);
+    Tensor<xpu, 3> out = out_data[proposal::kOut].get<xpu, 3, real_t>(s);
+    Tensor<xpu, 3> out_score = out_data[proposal::kScore].get<xpu, 3, real_t>(s);
 
-    int num_anchors = in_data[proposal::kClsProb].shape_[1] / 2;
+    int nbatch = scores.size(0);
+    int num_anchors = scores.size(1) / 2;
     int height = scores.size(2);
     int width = scores.size(3);
     int count = num_anchors * height * width;  // count of total anchors
@@ -433,117 +431,128 @@ class ProposalGPUOp : public Operator{
 
     // Copy generated anchors to GPU
     float* workspace_proposals_ptr = NULL;
-    FRCNN_CUDA_CHECK(cudaMalloc(&workspace_proposals_ptr, sizeof(float) * count * 5));
-    Tensor<xpu, 2> workspace_proposals(workspace_proposals_ptr, Shape2(count, 5));
-    FRCNN_CUDA_CHECK(cudaMemcpy(workspace_proposals.dptr_,
-                                &anchors[0], sizeof(float) * anchors.size(),
-      cudaMemcpyHostToDevice));
+    FRCNN_CUDA_CHECK(cudaMalloc(&workspace_proposals_ptr, sizeof(float) * nbatch * count * 5));
+    Tensor<xpu, 3> workspace_proposals(workspace_proposals_ptr, Shape3(nbatch, count, 5));
 
-    // Copy proposals to a mesh grid
-    dim3 dimGrid((count + kMaxThreadsPerBlock - 1) / kMaxThreadsPerBlock);
-    dim3 dimBlock(kMaxThreadsPerBlock);
-    CheckLaunchParam(dimGrid, dimBlock, "ProposalGrid");
-    ProposalGridKernel<<<dimGrid, dimBlock>>>(
-      count, num_anchors, height, width, param_.feature_stride,
-      scores.dptr_, workspace_proposals.dptr_);
-    FRCNN_CUDA_CHECK(cudaPeekAtLastError());
+      // im_info is small, we want to copy them to cpu
+      std::vector<float> cpu_im_info(3);
+      FRCNN_CUDA_CHECK(cudaMemcpy(&cpu_im_info[0], im_info.dptr_,
+                                  sizeof(float) * cpu_im_info.size(),
+                                  cudaMemcpyDeviceToHost));
 
-    // im_info is small, we want to copy them to cpu
-    std::vector<float> cpu_im_info(3);
-    FRCNN_CUDA_CHECK(cudaMemcpy(&cpu_im_info[0], im_info.dptr_,
-                                sizeof(float) * cpu_im_info.size(),
-                                cudaMemcpyDeviceToHost));
+      // prevent padded predictions
+      int real_height = static_cast<int>(cpu_im_info[0] / param_.feature_stride);
+      int real_width = static_cast<int>(cpu_im_info[1] / param_.feature_stride);
+      CHECK_GE(height, real_height) << height << " " << real_height << std::endl;
+      CHECK_GE(width, real_width) << width << " " << real_width << std::endl;
 
-    // prevent padded predictions
-    int real_height = static_cast<int>(cpu_im_info[0] / param_.feature_stride);
-    int real_width = static_cast<int>(cpu_im_info[1] / param_.feature_stride);
-    CHECK_GE(height, real_height) << height << " " << real_height << std::endl;
-    CHECK_GE(width, real_width) << width << " " << real_width << std::endl;
+    // Copy anchors for all images in batch
+    for (int i = 0; i < nbatch; i++) {
+      float* cur_batch_workspace_proposals_ptr = workspace_proposals.dptr_ + i * 5 * count;
+      FRCNN_CUDA_CHECK(cudaMemcpy(cur_batch_workspace_proposals_ptr,
+                                  &anchors[0], sizeof(float) * anchors.size(),
+        cudaMemcpyHostToDevice));
 
-    // Transform anchors and bbox_deltas into bboxes
-    CheckLaunchParam(dimGrid, dimBlock, "BBoxPred");
-    if (param_.iou_loss) {
-      IoUPredKernel<<<dimGrid, dimBlock>>>(
-        count, num_anchors, height, width, real_height, real_width,
-        cpu_im_info[0], cpu_im_info[1],
-        workspace_proposals.dptr_, bbox_deltas.dptr_, workspace_proposals.dptr_);
-    } else {
-      BBoxPredKernel<<<dimGrid, dimBlock>>>(
-        count, num_anchors, height, width, real_height, real_width,
-        cpu_im_info[0], cpu_im_info[1],
-        workspace_proposals.dptr_, bbox_deltas.dptr_, workspace_proposals.dptr_);
+      // get current batch foreground score
+      real_t* foreground_score_ptr = reinterpret_cast<real_t *>(scores.dptr_) + i * 2 * count
+                                      + fg_scores_shape.Size();
+      Tensor<xpu, 3> fg_scores = Tensor<xpu, 3>(foreground_score_ptr, fg_scores_shape);
+
+      // Copy proposals to a mesh grid
+      dim3 dimGrid((count + kMaxThreadsPerBlock - 1) / kMaxThreadsPerBlock);
+      dim3 dimBlock(kMaxThreadsPerBlock);
+      CheckLaunchParam(dimGrid, dimBlock, "ProposalGrid");
+      ProposalGridKernel<<<dimGrid, dimBlock>>>(
+        count, num_anchors, height, width, param_.feature_stride,
+        fg_scores.dptr_, cur_batch_workspace_proposals_ptr);
+      FRCNN_CUDA_CHECK(cudaPeekAtLastError());
+
+      // Transform anchors and bbox_deltas into bboxes
+      CheckLaunchParam(dimGrid, dimBlock, "BBoxPred");
+      if (param_.iou_loss) {
+        IoUPredKernel<<<dimGrid, dimBlock>>>(
+          count, num_anchors, height, width, real_height, real_width,
+          cpu_im_info[0], cpu_im_info[1],
+          cur_batch_workspace_proposals_ptr, bbox_deltas.dptr_ + i * 4 * count, cur_batch_workspace_proposals_ptr);
+      } else {
+        BBoxPredKernel<<<dimGrid, dimBlock>>>(
+          count, num_anchors, height, width, real_height, real_width,
+          cpu_im_info[0], cpu_im_info[1],
+          cur_batch_workspace_proposals_ptr, bbox_deltas.dptr_ + i * 4 * count, cur_batch_workspace_proposals_ptr);
+      }
+      FRCNN_CUDA_CHECK(cudaPeekAtLastError());
+
+      // filter boxes with less than rpn_min_size
+      CheckLaunchParam(dimGrid, dimBlock, "FilterBox");
+      FilterBoxKernel<<<dimGrid, dimBlock>>>(
+        count, param_.rpn_min_size * cpu_im_info[2], cur_batch_workspace_proposals_ptr);
+      FRCNN_CUDA_CHECK(cudaPeekAtLastError());
+
+      // Copy score to a continuous memory
+      float* score_ptr = NULL;
+      FRCNN_CUDA_CHECK(cudaMalloc(&score_ptr, sizeof(float) * count));
+      Tensor<xpu, 1> score(score_ptr, Shape1(count));
+      int* order_ptr = NULL;
+      FRCNN_CUDA_CHECK(cudaMalloc(&order_ptr, sizeof(int) * count));
+      Tensor<xpu, 1, int> order(order_ptr, Shape1(count));
+
+      CheckLaunchParam(dimGrid, dimBlock, "CopyScore");
+      CopyScoreKernel<<<dimGrid, dimBlock>>>(
+        count, cur_batch_workspace_proposals_ptr, score.dptr_, order.dptr_);
+      FRCNN_CUDA_CHECK(cudaPeekAtLastError());
+
+      // argsort score, save order
+      thrust::stable_sort_by_key(thrust::device,
+                                 score.dptr_,
+                                 score.dptr_ + score.size(0),
+                                 order.dptr_,
+                                 thrust::greater<real_t>());
+      FRCNN_CUDA_CHECK(cudaPeekAtLastError());
+
+      // Reorder proposals according to order
+      float* workspace_ordered_proposals_ptr = NULL;
+      FRCNN_CUDA_CHECK(cudaMalloc(&workspace_ordered_proposals_ptr,
+                                  sizeof(float) * rpn_pre_nms_top_n * 5));
+      Tensor<xpu, 2> workspace_ordered_proposals(workspace_ordered_proposals_ptr,
+                                                 Shape2(rpn_pre_nms_top_n, 5));
+
+      dimGrid.x = (rpn_pre_nms_top_n + kMaxThreadsPerBlock - 1) / kMaxThreadsPerBlock;
+      CheckLaunchParam(dimGrid, dimBlock, "ReorderProposals");
+      ReorderProposalsKernel<<<dimGrid, dimBlock>>>(
+        rpn_pre_nms_top_n, cur_batch_workspace_proposals_ptr, order.dptr_, workspace_ordered_proposals.dptr_);
+      FRCNN_CUDA_CHECK(cudaPeekAtLastError());
+
+      FRCNN_CUDA_CHECK(cudaFree(score_ptr));
+      FRCNN_CUDA_CHECK(cudaFree(order_ptr));
+
+      // perform nms
+      std::vector<int> _keep(workspace_ordered_proposals.size(0));
+      int out_size = 0;
+      _nms(workspace_ordered_proposals,
+           param_.threshold,
+           &_keep[0],
+           &out_size);
+
+      // copy nms result to gpu
+      int* keep;
+      FRCNN_CUDA_CHECK(cudaMalloc(&keep, sizeof(int) * _keep.size()));
+      FRCNN_CUDA_CHECK(cudaMemcpy(keep, &_keep[0], sizeof(int) * _keep.size(),
+                                  cudaMemcpyHostToDevice));
+
+      // copy results after nms
+      dimGrid.x = (rpn_post_nms_top_n + kMaxThreadsPerBlock - 1) / kMaxThreadsPerBlock;
+      CheckLaunchParam(dimGrid, dimBlock, "PrepareOutput");
+      PrepareOutput<<<dimGrid, dimBlock>>>(
+        rpn_post_nms_top_n, workspace_ordered_proposals.dptr_, keep, out_size, i,
+        out.dptr_ + i * 5 * rpn_post_nms_top_n, 
+        out_score.dptr_ + i * rpn_post_nms_top_n);
+      FRCNN_CUDA_CHECK(cudaPeekAtLastError());
+
+      // free temporary memory
+      FRCNN_CUDA_CHECK(cudaFree(keep));
+      FRCNN_CUDA_CHECK(cudaFree(workspace_ordered_proposals_ptr));
     }
-    FRCNN_CUDA_CHECK(cudaPeekAtLastError());
-
-    // filter boxes with less than rpn_min_size
-    CheckLaunchParam(dimGrid, dimBlock, "FilterBox");
-    FilterBoxKernel<<<dimGrid, dimBlock>>>(
-      count, param_.rpn_min_size * cpu_im_info[2], workspace_proposals.dptr_);
-    FRCNN_CUDA_CHECK(cudaPeekAtLastError());
-
-    // Copy score to a continuous memory
-    float* score_ptr = NULL;
-    FRCNN_CUDA_CHECK(cudaMalloc(&score_ptr, sizeof(float) * count));
-    Tensor<xpu, 1> score(score_ptr, Shape1(count));
-    int* order_ptr = NULL;
-    FRCNN_CUDA_CHECK(cudaMalloc(&order_ptr, sizeof(int) * count));
-    Tensor<xpu, 1, int> order(order_ptr, Shape1(count));
-
-    CheckLaunchParam(dimGrid, dimBlock, "CopyScore");
-    CopyScoreKernel<<<dimGrid, dimBlock>>>(
-      count, workspace_proposals.dptr_, score.dptr_, order.dptr_);
-    FRCNN_CUDA_CHECK(cudaPeekAtLastError());
-
-    // argsort score, save order
-    thrust::stable_sort_by_key(thrust::device,
-                               score.dptr_,
-                               score.dptr_ + score.size(0),
-                               order.dptr_,
-                               thrust::greater<real_t>());
-    FRCNN_CUDA_CHECK(cudaPeekAtLastError());
-
-    // Reorder proposals according to order
-    float* workspace_ordered_proposals_ptr = NULL;
-    FRCNN_CUDA_CHECK(cudaMalloc(&workspace_ordered_proposals_ptr,
-                                sizeof(float) * rpn_pre_nms_top_n * 5));
-    Tensor<xpu, 2> workspace_ordered_proposals(workspace_ordered_proposals_ptr,
-                                               Shape2(rpn_pre_nms_top_n, 5));
-
-    dimGrid.x = (rpn_pre_nms_top_n + kMaxThreadsPerBlock - 1) / kMaxThreadsPerBlock;
-    CheckLaunchParam(dimGrid, dimBlock, "ReorderProposals");
-    ReorderProposalsKernel<<<dimGrid, dimBlock>>>(
-      rpn_pre_nms_top_n, workspace_proposals.dptr_, order.dptr_, workspace_ordered_proposals.dptr_);
-    FRCNN_CUDA_CHECK(cudaPeekAtLastError());
-
     FRCNN_CUDA_CHECK(cudaFree(workspace_proposals_ptr));
-    FRCNN_CUDA_CHECK(cudaFree(score_ptr));
-    FRCNN_CUDA_CHECK(cudaFree(order_ptr));
-
-    // perform nms
-    std::vector<int> _keep(workspace_ordered_proposals.size(0));
-    int out_size = 0;
-    _nms(workspace_ordered_proposals,
-         param_.threshold,
-         &_keep[0],
-         &out_size);
-
-    // copy nms result to gpu
-    int* keep;
-    FRCNN_CUDA_CHECK(cudaMalloc(&keep, sizeof(int) * _keep.size()));
-    FRCNN_CUDA_CHECK(cudaMemcpy(keep, &_keep[0], sizeof(int) * _keep.size(),
-                                cudaMemcpyHostToDevice));
-
-    // copy results after nms
-    dimGrid.x = (rpn_post_nms_top_n + kMaxThreadsPerBlock - 1) / kMaxThreadsPerBlock;
-    CheckLaunchParam(dimGrid, dimBlock, "PrepareOutput");
-    PrepareOutput<<<dimGrid, dimBlock>>>(
-      rpn_post_nms_top_n, workspace_ordered_proposals.dptr_, keep, out_size,
-      out.dptr_, out_score.dptr_);
-    FRCNN_CUDA_CHECK(cudaPeekAtLastError());
-
-    // free temporary memory
-    FRCNN_CUDA_CHECK(cudaFree(keep));
-    FRCNN_CUDA_CHECK(cudaFree(workspace_ordered_proposals_ptr));
   }
 
   virtual void Backward(const OpContext &ctx,
