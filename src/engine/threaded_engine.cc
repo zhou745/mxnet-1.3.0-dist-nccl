@@ -187,9 +187,11 @@ ThreadedOpr* ThreadedEngine::NewOperator(
     std::vector<VarHandle> const& const_vars,
     std::vector<VarHandle> const& mutable_vars,
     FnProperty prop,
-    const char* opr_name) {
+    const char* opr_name,
+    const char* attr_name) {
   auto ret = ThreadedOpr::New();
   ret->opr_name = opr_name;
+  ret->attr_name = attr_name;
   ret->fn = std::move(fn);
   ret->prop = prop;
   ret->const_vars.resize(const_vars.size());
@@ -285,8 +287,9 @@ void ThreadedEngine::PushAsync(AsyncFn fn, Context exec_ctx,
                                std::vector<VarHandle> const& mutable_vars,
                                FnProperty prop,
                                int priority,
-                               const char* opr_name) {
-  ThreadedOpr *opr = NewOperator(std::move(fn), const_vars, mutable_vars, prop, opr_name);
+                               const char* opr_name,
+                               const char* attr_name) {
+  ThreadedOpr *opr = NewOperator(std::move(fn), const_vars, mutable_vars, prop, opr_name, attr_name);
   opr->temporary = true;
 #if MXNET_USE_PROFILER
   Profiler *profiler = Profiler::Get();
@@ -403,7 +406,7 @@ void ThreadedEngine::OnCompleteStatic(
   OprBlock *opr_block = static_cast<OprBlock*>(opr_block_);
   ThreadedOpr *threaded_opr = opr_block->opr;
 #if MXNET_USE_PROFILER
-  if (opr_block->profiling && threaded_opr->opr_name) {
+  if (opr_block->profiling && threaded_opr->opr_name && threaded_opr->attr_name) {
     // record operator end timestamp
     SetOprEnd(opr_block->opr_stat);
   }

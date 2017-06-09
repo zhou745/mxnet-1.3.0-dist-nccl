@@ -108,13 +108,15 @@ class MXNET_API Engine {
    * \param mutable_vars The variables that current operation will mutate.
    * \param prop Property of the function.
    * \param opr_name The operator name.
+   * \param attr_name The attribute name.
    * \return The new operator allocated.
    */
   virtual OprHandle NewOperator(AsyncFn fn,
                                 std::vector<VarHandle> const& const_vars,
                                 std::vector<VarHandle> const& mutable_vars,
                                 FnProperty prop = FnProperty::kNormal,
-                                const char* opr_name = nullptr) = 0;
+                                const char* opr_name = nullptr,
+                                const char* attr_name = nullptr) = 0;
   /*!
    * \brief Delete the given operator.
    * \param op The operator to delete.
@@ -143,13 +145,15 @@ class MXNET_API Engine {
    * \param prop Property of the function.
    * \param priority Priority of the action, as hint to the engine.
    * \param opr_name The operator name.
+   * \param attr_name The attribute name.
    */
   virtual void PushAsync(AsyncFn exec_fun, Context exec_ctx,
                          std::vector<VarHandle> const& const_vars,
                          std::vector<VarHandle> const& mutable_vars,
                          FnProperty prop = FnProperty::kNormal,
                          int priority = 0,
-                         const char* opr_name = nullptr) = 0;
+                         const char* opr_name = nullptr,
+                         const char* attr_name = nullptr) = 0;
   /*!
    * \brief Schedule the deletion of a variable.
    *
@@ -199,6 +203,7 @@ class MXNET_API Engine {
    * \param prop Property of the function.
    * \param priority Priority of the action, as hint to the engine.
    * \param opr_name The operator name.
+   * \param attr_name The attribute name.
    * \tparam SyncFn the synchronous function to be pushed.
    */
   inline void PushSync(SyncFn exec_fn, Context exec_ctx,
@@ -206,11 +211,12 @@ class MXNET_API Engine {
                        std::vector<VarHandle> const& mutable_vars,
                        FnProperty prop = FnProperty::kNormal,
                        int priority = 0,
-                       const char* opr_name = nullptr) {
+                       const char* opr_name = nullptr,
+                       const char* attr_name = nullptr) {
     this->PushAsync([exec_fn](RunContext ctx, CallbackOnComplete on_complete) {
         exec_fn(ctx);
         on_complete();
-      }, exec_ctx, const_vars, mutable_vars, prop, priority, opr_name);
+      }, exec_ctx, const_vars, mutable_vars, prop, priority, opr_name, attr_name);
   }
 
   /*!
