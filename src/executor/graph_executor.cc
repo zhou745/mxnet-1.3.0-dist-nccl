@@ -584,8 +584,10 @@ void GraphExecutor::InitCachedOps() {
     if (inode.source->is_variable()) continue;
 #if MXNET_USE_PROFILER
     op_nodes_[nid].opr_name = inode.source->op()->name.c_str();
+    op_nodes_[nid].attr_name = inode.source->attrs.name.c_str();
 #else
     op_nodes_[nid].opr_name = nullptr;
+    op_nodes_[nid].attr_name = nullptr;
 #endif
     if (skip_plus_node.at(nid)) {
       op_nodes_[nid].skip_exec_node = true; continue;
@@ -674,7 +676,8 @@ void GraphExecutor::InitCachedOps() {
     // setup the vars
     op_nodes_[nid].cached_opr = Engine::Get()->NewOperator(
         exec_fun, use_vars, mutate_vars, FnProperty::kNormal,
-        PROFILER_MESSAGE(op_nodes_[nid].opr_name));
+        PROFILER_MESSAGE(op_nodes_[nid].opr_name),
+        PROFILER_MESSAGE(op_nodes_[nid].attr_name));
     op_nodes_[nid].mutate_vars = mutate_vars;
     op_nodes_[nid].use_vars = use_vars;
   }
@@ -849,8 +852,10 @@ GraphExecutor::CachedSegOpr GraphExecutor::CreateCachedSegOpr(size_t topo_start,
   }
 #if MXNET_USE_PROFILER
   std::string opr_names = "[";
+  std::string attr_names = "[";
 #else
   std::string opr_names = "Bulk Execution";
+  std::string attr_names = "Bulk Execution";
 #endif
 
   const auto& idx = graph_.indexed_graph();
@@ -875,6 +880,7 @@ GraphExecutor::CachedSegOpr GraphExecutor::CreateCachedSegOpr(size_t topo_start,
     ret.exec_list.push_back(exec.get());
 #if MXNET_USE_PROFILER
     opr_names += inode.source->op()->name + ",";
+    attr_names += inode.source->attrs.name + ",";
 #endif
   }
 
@@ -902,14 +908,19 @@ GraphExecutor::CachedSegOpr GraphExecutor::CreateCachedSegOpr(size_t topo_start,
 #if MXNET_USE_PROFILER
     opr_names.pop_back();
     opr_names += "]";
+    attr_names.pop_back();
+    attr_names += "]";
     // the lifetime of `opr_names.c_str()` is same with opr_names
     // you need to copy it out. (potential memory leak risk)
     char *p_opr_name = new char[opr_names.size() + 1];
     memcpy(p_opr_name, opr_names.c_str(), opr_names.size() + 1);
+    char *p_attr_name = new char[attr_names.size() + 1];
+    memcpy(p_attr_name, attr_names.c_str(), attr_names.size() + 1);
 #endif
   ret.opr = Engine::Get()->NewOperator(
       exec_fun, use_vars, mutate_vars, FnProperty::kNormal,
-      PROFILER_MESSAGE(p_opr_name));
+      PROFILER_MESSAGE(p_opr_name),
+      PROFILER_MESSAGE(p_attr_name));
   return ret;
 }
 }  // namespace exec

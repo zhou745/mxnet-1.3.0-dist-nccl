@@ -2,7 +2,7 @@
  * Copyright (c) 2015 by Contributors
  * \file proposal-inl.h
  * \brief Proposal Operator
- * \author Piotr Teterwak, Bing Xu, Jian Guo
+ * \author Piotr Teterwak, Bing Xu, Jian Guo, Pengfei Chen
 */
 #ifndef MXNET_OPERATOR_CONTRIB_PROPOSAL_INL_H_
 #define MXNET_OPERATOR_CONTRIB_PROPOSAL_INL_H_
@@ -186,9 +186,9 @@ class ProposalProp : public OperatorProperty {
     SHAPE_ASSIGN_CHECK(*in_shape, proposal::kImInfo, im_info_shape);
     out_shape->clear();
     // output
-    out_shape->push_back(Shape2(param_.rpn_post_nms_top_n, 5));
+    out_shape->push_back(Shape3(dshape[0], param_.rpn_post_nms_top_n, 5));
     // score
-    out_shape->push_back(Shape2(param_.rpn_post_nms_top_n, 1));
+    out_shape->push_back(Shape3(dshape[0], param_.rpn_post_nms_top_n, 1));
     return true;
   }
 

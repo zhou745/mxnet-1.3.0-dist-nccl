@@ -69,6 +69,8 @@ class GraphExecutor : public Executor {
     // The name of the operator
     const char* opr_name;
     // the context of the node
+    const char* attr_name;
+    // the context of the node
     Context ctx;
     // The executor
     std::shared_ptr<OpExecutor> exec;

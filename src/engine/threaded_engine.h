@@ -209,6 +209,8 @@ struct ThreadedOpr final : public Opr,
   FnProperty prop;
   /*! \brief The name of the operator */
   const char* opr_name{nullptr};
+  /*! \brief The name of the attribute */
+  const char* attr_name{nullptr};
   /*!
    * \brief Whether this is an temporary operator
    *        that can be deleted right after the operation completed.
@@ -243,7 +245,8 @@ class ThreadedEngine : public Engine {
                            std::vector<VarHandle> const& const_vars,
                            std::vector<VarHandle> const& mutable_vars,
                            FnProperty prop = FnProperty::kNormal,
-                           const char* opr_name = nullptr) override;
+                           const char* opr_name = nullptr,
+                           const char* attr_name = nullptr) override;
   void DeleteOperator(OprHandle op) override;
   void Push(OprHandle op, Context exec_ctx, int priority = 0, bool profiling = false) override;
   void PushAsync(AsyncFn exec_fun, Context exec_ctx,
@@ -251,7 +254,8 @@ class ThreadedEngine : public Engine {
                  std::vector<VarHandle> const& mutable_vars,
                  FnProperty prop = FnProperty::kNormal,
                  int priority = 0,
-                 const char* opr_name = nullptr) override;
+                 const char* opr_name = nullptr,
+                 const char* attr_name = nullptr) override;
   void DeleteVariable(SyncFn delete_fn, Context exec_ctx, VarHandle var) override;
   void WaitForVar(VarHandle var) override;
   void WaitForAll() override;
@@ -294,7 +298,7 @@ class ThreadedEngine : public Engine {
   void ExecuteOprBlock(RunContext run_ctx, OprBlock *opr_block) {
     ThreadedOpr* threaded_opr = opr_block->opr;
 #if MXNET_USE_PROFILER
-    if (opr_block->profiling && threaded_opr->opr_name) {
+    if (opr_block->profiling && threaded_opr->opr_name && threaded_opr->attr_name) {
       const Context& ctx = opr_block->ctx;
       opr_block->opr_stat = Profiler::Get()->AddOprStat(ctx.dev_type, ctx.dev_id);
       uint64_t id = std::hash<std::thread::id>()(std::this_thread::get_id());
@@ -302,6 +306,9 @@ class ThreadedEngine : public Engine {
       strncpy(opr_block->opr_stat->opr_name,
         threaded_opr->opr_name,
         sizeof(opr_block->opr_stat->opr_name) - 1);
+      strncpy(opr_block->opr_stat->attr_name,
+          threaded_opr->attr_name,
+          sizeof(opr_block->opr_stat->attr_name) - 1);
       // record operator start timestamp
       SetOprStart(opr_block->opr_stat);
     }
