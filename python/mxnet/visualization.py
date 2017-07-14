@@ -240,6 +240,14 @@ def plot_network(symbol, title="plot", save_format='pdf', shape=None, node_attrs
             return True
         if name.endswith("_bias"):
             return True
+        if name.endswith("_var"):
+            return True
+        if name.endswith("_beta"):
+            return True
+        if name.endswith("_gamma"):
+            return True
+        if name.endswith("_mean"):
+            return True
         return False
 
     # make nodes
