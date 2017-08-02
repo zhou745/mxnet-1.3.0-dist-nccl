@@ -205,7 +205,7 @@ inline void ROIPoolBackwardAcc(const Tensor<gpu, 4, Dtype> &in_grad,
   Dtype *bottom_diff = in_grad.dptr_;
   Dtype *argmax_data = max_idx.dptr_;
   const int count = in_grad.shape_.Size();
-  const int num_rois = bbox.size(1);
+  const int num_rois = bbox.size(0) * bbox.size(1);
   const int channels = in_grad.size(1);
   const int height = in_grad.size(2);
   const int width = in_grad.size(3);
