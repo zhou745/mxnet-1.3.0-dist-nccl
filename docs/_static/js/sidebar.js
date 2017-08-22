@@ -19,7 +19,7 @@ function render_left_helper(toc, currentText) {
     $('.leftsidebar > .sphinxsidebarwrapper').children().remove();
     $('.leftsidebar > .sphinxsidebarwrapper').append(lefttoc);
     
-    $('.leftsidebar > .sphinxsidebarwrapper').prepend('<h3>' + currentText + ' Contents</h3>');
+    $('.leftsidebar > .sphinxsidebarwrapper').prepend('<h3>Contents</h3>');
     addToggle('.leftsidebar');
     
     $('.leftsidebar li a').click(function () {
@@ -42,7 +42,15 @@ function render_lefttoc() {
         for(var i = 0; i < TITLE_WITH_LANG.length; ++i) {
             var path = TITLE_WITH_LANG[i];
             if (url.indexOf(path) != -1) {
-                var urlPath = 'http://' + window.location.host + path;
+                urlElem = url.split('/');
+                version = '';
+                for (var j = 0; j < urlElem.length; ++j) {
+                    if(urlElem[j] == 'versions') {
+                        version = '/versions/' + urlElem[j + 1];
+                        break;
+                    }
+                }
+                var urlPath = 'https://' + window.location.host + version +  path;
                 $.get(urlPath + indexTrailing, null, function(data) {
                     var currentText = $($.parseHTML(data)).find('.leftsidebar >  .sphinxsidebarwrapper > ul.current > li.current > a').html();
                     if (isAPI) {
@@ -210,20 +218,25 @@ function keepExpand() {
 
 $(document).ready(function () {
     var url = window.location.href, searchFlag = 'search.html';
-    if(url.indexOf('/get_started/') != -1) {
-        $('body').css("visibility", "visible");
-    }
-    if (url.indexOf(searchFlag) == -1) {
-        for(var i = 0; i < API_PAGE.length; ++i) {
-            if (url.indexOf('/api/' + API_PAGE[i]) != -1) {
-                isAPI = true;
-                break;
+    try {
+        if(url.indexOf('/get_started/') != -1) return;
+        if (url.indexOf(searchFlag) == -1) {
+            for(var i = 0; i < API_PAGE.length; ++i) {
+                if (url.indexOf('/api/' + API_PAGE[i]) != -1) {
+                    isAPI = true;
+                    break;
+                }
             }
+            render_righttoc();
+            if ($('.leftsidebar').length) render_lefttoc();
         }
-        render_righttoc();
-        if ($('.leftsidebar').length) render_lefttoc();
+        
+        if(url.indexOf('/api/') != -1) return;
+        $(window).scroll(function () {
+            scroll_righttoc();
+        });
     }
-    $(window).scroll(function () {
-        scroll_righttoc();
-    });
+    catch(err) {
+        return;
+    }
 });
