@@ -48,7 +48,7 @@ The following API is the core interface for the execution engine:
 This API allows you to push a function (`exec_fun`),
 along with its context information and dependencies, to the engine.
 `exec_ctx` is the context information in which the `exec_fun` should be executed,
-`const_vars` denotes the variables that the function reads from,  
+`const_vars` denotes the variables that the function reads from, 
 and `mutate_vars` are the variables to be modified.
 The engine provides the following guarantee:
 
@@ -184,7 +184,7 @@ In MXNet, an operator is a class that contains both actual computation logic
 and auxiliary information that can aid the system in performing optimizations,
 like in-place updates and auto-derivatives.
 To understand the remainder of the document,
-we recommend that you familiarize youself with the `mshadow` library,
+we recommend that you familiarize yourself with the `mshadow` library,
 because all operators compute on the tensor-like structure `mshadow::TBlob`
 provided by the system during runtime.
 
