@@ -283,6 +283,7 @@ struct AdamParam : public dmlc::Parameter<AdamParam> {
   float wd;
   float rescale_grad;
   float clip_gradient;
+  bool use_tusimple_update;
   DMLC_DECLARE_PARAMETER(AdamParam) {
     DMLC_DECLARE_FIELD(lr)
     .describe("Learning rate");
@@ -308,6 +309,9 @@ struct AdamParam : public dmlc::Parameter<AdamParam> {
     .describe("Clip gradient to the range of [-clip_gradient, clip_gradient] "
               "If clip_gradient <= 0, gradient clipping is turned off. "
               "grad = max(min(grad, clip_gradient), -clip_gradient).");
+    DMLC_DECLARE_FIELD(use_tusimple_update)
+    .set_default(true)
+    .describe("whether use the gradient of weight decay when caculate mean & var");
   }
 };
 
@@ -328,10 +332,13 @@ inline void AdamUpdate(const nnvm::NodeAttrs& attrs,
     Tensor<xpu, 2, DType> mean = inputs[2].FlatTo2D<xpu, DType>(s);
     Tensor<xpu, 2, DType> var = inputs[3].FlatTo2D<xpu, DType>(s);
     Tensor<xpu, 2, DType> out = outputs[0].FlatTo2D<xpu, DType>(s);
-
-    grad = scalar<DType>(param.rescale_grad) * grad +
-      scalar<DType>(param.wd) * weight;
-
+    if (param.use_tusimple_update == 0){
+        grad = scalar<DType>(param.rescale_grad) * grad +
+            scalar<DType>(param.wd) * weight;
+      }
+    else{
+        grad = scalar<DType>(param.rescale_grad) * grad;
+    }
     if (param.clip_gradient >= 0.0f) {
       mean = scalar<DType>(param.beta1)*mean + scalar<DType>(1.f-param.beta1) *
           F<clip>(grad, DType(param.clip_gradient));
@@ -341,10 +348,19 @@ inline void AdamUpdate(const nnvm::NodeAttrs& attrs,
       mean = scalar<DType>(param.beta1)*mean + scalar<DType>(1.f-param.beta1) * grad;
       var = scalar<DType>(param.beta2)*var + scalar<DType>(1.f-param.beta2) * F<square>(grad);
     }
+    if (param.use_tusimple_update == 0){
     Assign(out, req[0],
            weight -
            scalar<DType>(param.lr) * mean /
            (F<square_root>(var) + scalar<DType>(param.epsilon)));
+    }
+    else{
+    Assign(out, req[0],
+           scalar<DType>(1.f-param.lr*param.wd)*weight -
+           scalar<DType>(param.lr) * mean /
+           (F<square_root>(var) + scalar<DType>(param.epsilon)));
+
+    }
   });
 }
 

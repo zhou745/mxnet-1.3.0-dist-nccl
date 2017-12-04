@@ -555,12 +555,13 @@ class Adam(Optimizer):
     epsilon : float, optional
         Small value to avoid division by 0.
     """
-    def __init__(self, learning_rate=0.001, beta1=0.9, beta2=0.999, epsilon=1e-8,
+    def __init__(self, learning_rate=0.001, beta1=0.9, beta2=0.999, epsilon=1e-8,use_tusimple_update=False,
                  **kwargs):
         super(Adam, self).__init__(learning_rate=learning_rate, **kwargs)
         self.beta1 = beta1
         self.beta2 = beta2
         self.epsilon = epsilon
+        self.use_tusimple_update = use_tusimple_update
 
     def create_state(self, index, weight):
         return (zeros(weight.shape, weight.context, dtype=weight.dtype),  # mean
@@ -579,7 +580,7 @@ class Adam(Optimizer):
         lr *= math.sqrt(coef2)/coef1
 
         kwargs = {'beta1': self.beta1, 'beta2': self.beta2, 'epsilon': self.epsilon,
-                  'rescale_grad': self.rescale_grad}
+                'rescale_grad': self.rescale_grad, 'use_tusimple_update':self.use_tusimple_update}
         if self.clip_gradient:
             kwargs['clip_gradient'] = self.clip_gradient
 
