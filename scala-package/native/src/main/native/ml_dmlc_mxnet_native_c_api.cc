@@ -18,6 +18,7 @@
  */
 
 /*!
+ *  Copyright (c) 2015 by Contributors
  * \file ml_dmlc_mxnet_native_c_api.cc
  * \brief JNI function implementations
  */
@@ -2301,7 +2302,10 @@ JNIEXPORT jint JNICALL Java_ml_dmlc_mxnet_LibInfo_mxCustomOpRegister
                   ptrsArr, (jsize)0, (jsize)size, reinterpret_cast<jlong*>(ptrs));
 #if MXNET_USE_CUDA
                 mxnet::NDArray* tmp = reinterpret_cast<mxnet::NDArray*>(ptrs[0]);
-                CUDA_CALL(cudaSetDevice(tmp->ctx().dev_id));
+                if (tmp->ctx().dev_type == mxnet::Context::kGPU
+                  || tmp->ctx().dev_type == mxnet::Context::kCPUPinned) {
+                  CUDA_CALL(cudaSetDevice(tmp->ctx().dev_id));
+                }
 #endif
                 bool is_train =  true;
                 if (isTrain == 0) is_train = false;

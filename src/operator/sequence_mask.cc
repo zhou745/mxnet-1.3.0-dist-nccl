@@ -18,24 +18,12 @@
  */
 
 /*!
+ * Copyright (c) 2015 by Contributors
  * \file sequence_mask.cc
  * \brief
  * \author Sebastian Bodenstein
 */
 #include "./sequence_mask-inl.h"
-
-namespace mshadow {
-
-template <typename DType>
-inline void SequenceMask(const Tensor<cpu, 3, DType> &dst,
-                         const Tensor<cpu, 1, DType> label, DType value) {
-  for (index_t b = 0; b < dst.size(1); ++b)
-    for (index_t s = label[b]; s < dst.size(0); ++s)
-      for (index_t r = 0; r < dst.size(2); ++r)
-        dst[s][b][r] = value;
-}
-
-}  // namespace mshadow
 
 namespace mxnet {
 namespace op {

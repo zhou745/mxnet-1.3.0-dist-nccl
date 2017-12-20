@@ -18,6 +18,7 @@
  */
 
 /*!
+ * Copyright (c) 2015 by Contributors
  * \file profiler.cc
  * \brief implements profiler
  */
@@ -99,7 +100,6 @@ OprExecStat *Profiler::AddOprStat(int dev_type, uint32_t dev_id) {
   opr_stat->dev_type = dev_type;
   opr_stat->dev_id   = dev_id;
   opr_stat->opr_name[sizeof(opr_stat->opr_name)-1] = '\0';
-  opr_stat->attr_name[sizeof(opr_stat->attr_name)-1] = '\0';
 
   int idx;
   switch (dev_type) {
@@ -186,10 +186,10 @@ void Profiler::DumpProfile() {
         file << ",";
       }
       file << std::endl;
-      this->EmitEvent(&file, opr_stat->attr_name, opr_stat->opr_name, "B",
+      this->EmitEvent(&file, opr_stat->opr_name, "category", "B",
             opr_stat->opr_start_rel_micros, pid, tid);
       file << ",\n";
-      this->EmitEvent(&file, opr_stat->attr_name, opr_stat->opr_name, "E",
+      this->EmitEvent(&file, opr_stat->opr_name, "category", "E",
             opr_stat->opr_end_rel_micros, pid, tid);
     }
   }

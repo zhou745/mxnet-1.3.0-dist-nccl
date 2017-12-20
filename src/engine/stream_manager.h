@@ -18,6 +18,7 @@
  */
 
 /*!
+ * Copyright (c) 2015 by Contributors
  */
 #ifndef MXNET_ENGINE_STREAM_MANAGER_H_
 #define MXNET_ENGINE_STREAM_MANAGER_H_
@@ -77,7 +78,7 @@ RunContext StreamManager<kNumGpus, kStreams>::GetRunContext(
         auto&& counter = gpu_cnt_.at(ctx.dev_id);
         if (counter == -1) {
           for (auto&& i : gpu_streams_.at(ctx.dev_id)) {
-            i = mshadow::NewStream<gpu>(true, MXNET_USE_CUDNN != 0);
+            i = mshadow::NewStream<gpu>(true, MXNET_USE_CUDNN != 0, ctx.dev_id);
           }
           counter = 0;
         }
@@ -89,6 +90,8 @@ RunContext StreamManager<kNumGpus, kStreams>::GetRunContext(
 #else
       LOG(FATAL) << MXNET_GPU_NOT_ENABLED_ERROR;
 #endif  // MXNET_USE_CUDA
+    default:
+      LOG(FATAL) << "Not Reached";
     }
   }
   return ret;
@@ -108,7 +111,7 @@ RunContext StreamManager<kNumGpus, kStreams>::GetIORunContext(
       {
         std::lock_guard<std::mutex> lock{m_};
         if (gpu_io_streams_.at(ctx.dev_id) == nullptr) {
-          gpu_io_streams_.at(ctx.dev_id) = mshadow::NewStream<gpu>(false, false);
+          gpu_io_streams_.at(ctx.dev_id) = mshadow::NewStream<gpu>(false, false, ctx.dev_id);
         }
       }
       ret = RunContext{ctx, gpu_io_streams_.at(ctx.dev_id)};
@@ -116,6 +119,8 @@ RunContext StreamManager<kNumGpus, kStreams>::GetIORunContext(
 #else
       LOG(FATAL) << MXNET_GPU_NOT_ENABLED_ERROR;
 #endif  // MXNET_USE_CUDA
+    default:
+      LOG(FATAL) << "Not Reached";
     }
   }
   return ret;
