@@ -18,6 +18,7 @@
  */
 
 /*!
+ * Copyright (c) 2015 by Contributors
  * \file threaded_engine.h
  * \brief Implements base class of threaded engine
  *    that tracks the dependency and pushes actions to execute.
@@ -28,15 +29,18 @@
 
 #include <dmlc/base.h>
 #include <dmlc/logging.h>
+#include <dmlc/omp.h>
 #include <vector>
 #include <functional>
 #include <condition_variable>
 #include <atomic>
+#include <utility>
 #include <mutex>
 #include <string>
 #include <thread>
 #include "./engine_impl.h"
 #include "./profiler.h"
+#include "./openmp.h"
 #include "../common/object_pool.h"
 
 namespace mxnet {
@@ -227,8 +231,6 @@ struct ThreadedOpr final : public Opr,
   FnProperty prop;
   /*! \brief The name of the operator */
   const char* opr_name{nullptr};
-  /*! \brief The name of the attribute */
-  const char* attr_name{nullptr};
   /*!
    * \brief Whether this is an temporary operator
    *        that can be deleted right after the operation completed.
@@ -263,8 +265,7 @@ class ThreadedEngine : public Engine {
                            std::vector<VarHandle> const& const_vars,
                            std::vector<VarHandle> const& mutable_vars,
                            FnProperty prop = FnProperty::kNormal,
-                           const char* opr_name = nullptr,
-                           const char* attr_name = nullptr) override;
+                           const char* opr_name = nullptr) override;
   void DeleteOperator(OprHandle op) override;
   void Push(OprHandle op, Context exec_ctx, int priority = 0, bool profiling = false) override;
   void PushAsync(AsyncFn exec_fun, Context exec_ctx,
@@ -272,8 +273,13 @@ class ThreadedEngine : public Engine {
                  std::vector<VarHandle> const& mutable_vars,
                  FnProperty prop = FnProperty::kNormal,
                  int priority = 0,
-                 const char* opr_name = nullptr,
-                 const char* attr_name = nullptr) override;
+                 const char* opr_name = nullptr) override;
+  void PushSync(SyncFn exec_fn, Context exec_ctx,
+                std::vector<VarHandle> const& const_vars,
+                std::vector<VarHandle> const& mutable_vars,
+                FnProperty prop = FnProperty::kNormal,
+                int priority = 0,
+                const char* opr_name = nullptr) override;
   void DeleteVariable(SyncFn delete_fn, Context exec_ctx, VarHandle var) override;
   void WaitForVar(VarHandle var) override;
   void WaitForAll() override;
@@ -288,6 +294,8 @@ class ThreadedEngine : public Engine {
     objpool_blk_ref_    = common::ObjectPool<OprBlock>::_GetSharedRef();
     objpool_varblk_ref_ = common::ObjectPool<VersionedVarBlock>::_GetSharedRef();
     objpool_var_ref_    = common::ObjectPool<ThreadedVar>::_GetSharedRef();
+
+    /*! \brief Set default OMP threads per kernel worker to default */
   }
   ~ThreadedEngine() {
     {
@@ -316,7 +324,7 @@ class ThreadedEngine : public Engine {
   void ExecuteOprBlock(RunContext run_ctx, OprBlock *opr_block) {
     ThreadedOpr* threaded_opr = opr_block->opr;
 #if MXNET_USE_PROFILER
-    if (opr_block->profiling && threaded_opr->opr_name && threaded_opr->attr_name) {
+    if (opr_block->profiling && threaded_opr->opr_name) {
       const Context& ctx = opr_block->ctx;
       opr_block->opr_stat = Profiler::Get()->AddOprStat(ctx.dev_type, ctx.dev_id);
       uint64_t id = std::hash<std::thread::id>()(std::this_thread::get_id());
@@ -324,9 +332,6 @@ class ThreadedEngine : public Engine {
       strncpy(opr_block->opr_stat->opr_name,
         threaded_opr->opr_name,
         sizeof(opr_block->opr_stat->opr_name) - 1);
-      strncpy(opr_block->opr_stat->attr_name,
-          threaded_opr->attr_name,
-          sizeof(opr_block->opr_stat->attr_name) - 1);
       // record operator start timestamp
       SetOprStart(opr_block->opr_stat);
     }
@@ -352,7 +357,7 @@ class ThreadedEngine : public Engine {
         if (what.find("driver shutting down") == std::string::npos &&
             !shutdown_phase_) {
           LOG(FATAL) << e.what() << "\n" <<
-            "An fatal error occurred in asynchronous engine operation. "
+            "A fatal error occurred in asynchronous engine operation. "
             "If you do not know what caused this error, "
             "you can try set environment variable MXNET_ENGINE_TYPE "
             "to NaiveEngine and run with debugger (i.e. gdb). "
@@ -367,7 +372,35 @@ class ThreadedEngine : public Engine {
     }
   }
 
+  int bulk_size() const override {
+    return BulkStatusStore::Get()->bulk_size;
+  }
+
+  int set_bulk_size(int bulk_size) override {
+    BulkStatus& bulk_status = *BulkStatusStore::Get();
+    std::swap(bulk_status.bulk_size, bulk_size);
+    if (bulk_status.count >= bulk_status.bulk_size) BulkFlush();
+    return bulk_size;
+  }
+
  private:
+  /*! \brief structure for holding bulk execution status */
+  struct BulkStatus {
+    /*! \brief maximum number of ops per bulk */
+    int bulk_size = 0;
+    /*! \brief current number of ops in bulk */
+    int count = 0;
+    /*! \brief context of current ops */
+    Context ctx;
+    /*! \brief current op functions */
+    SyncFn fn;
+    /*! \brief constant variables */
+    std::vector<VarHandle> const_vars;
+    /*! \brief mutable variables */
+    std::vector<VarHandle> mutable_vars;
+  };
+  /*! thread local store for bulk */
+  typedef dmlc::ThreadLocalStore<BulkStatus> BulkStatusStore;
   /*!
    * \brief check if thee is duplication in const_vars and mutable_vars.
    * \param const_vars the variables to read from.
@@ -383,6 +416,46 @@ class ThreadedEngine : public Engine {
   inline void OnComplete(ThreadedOpr* threaded_opr);
   // callback to the threaded engine
   static void OnCompleteStatic(Engine *engine, void *threaded_opr);
+  /*! \brief append an operator to bulk */
+  inline void BulkAppend(SyncFn exec_fn, Context exec_ctx,
+                         std::vector<VarHandle> const& const_vars,
+                         std::vector<VarHandle> const& mutable_vars) {
+    BulkStatus& bulk_status = *BulkStatusStore::Get();
+    if (!bulk_status.count) {
+      bulk_status.ctx = exec_ctx;
+      bulk_status.fn = std::move(exec_fn);
+    } else {
+      auto prev_fn = std::move(bulk_status.fn);
+      bulk_status.fn = [exec_fn, prev_fn](RunContext rctx) {
+          prev_fn(rctx);
+          exec_fn(rctx);
+        };
+    }
+
+    ++bulk_status.count;
+    bulk_status.const_vars.insert(
+        bulk_status.const_vars.end(), const_vars.begin(), const_vars.end());
+    bulk_status.mutable_vars.insert(
+        bulk_status.mutable_vars.end(), mutable_vars.begin(), mutable_vars.end());
+
+    if (bulk_status.count >= bulk_status.bulk_size) BulkFlush();
+  }
+  /*! \brief flush current bulk to execution */
+  inline void BulkFlush() {
+    BulkStatus& bulk_status = *BulkStatusStore::Get();
+    if (!bulk_status.count) return;
+    bulk_status.count = 0;
+    DeduplicateVarHandle(&bulk_status.const_vars, &bulk_status.mutable_vars);
+    auto fn = std::move(bulk_status.fn);
+    this->PushAsync([fn](RunContext ctx, CallbackOnComplete on_complete) {
+        fn(ctx);
+        on_complete();
+      }, bulk_status.ctx, bulk_status.const_vars, bulk_status.mutable_vars,
+      FnProperty::kNormal, 0, "ImperativeBulk");
+
+    bulk_status.const_vars.clear();
+    bulk_status.mutable_vars.clear();
+  }
   /*!
    * \brief Number of pending operations.
    */
@@ -412,6 +485,7 @@ class ThreadedEngine : public Engine {
   std::shared_ptr<common::ObjectPool<OprBlock> >          objpool_blk_ref_;
   std::shared_ptr<common::ObjectPool<VersionedVarBlock> > objpool_varblk_ref_;
   std::shared_ptr<common::ObjectPool<ThreadedVar> >       objpool_var_ref_;
+
   /*!
    * \brief Disallow copy construction and assignment.
    */
@@ -420,4 +494,5 @@ class ThreadedEngine : public Engine {
 
 }  // namespace engine
 }  // namespace mxnet
+
 #endif  // MXNET_ENGINE_THREADED_ENGINE_H_

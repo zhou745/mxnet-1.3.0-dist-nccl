@@ -18,6 +18,7 @@
  */
 
 /*!
+ * Copyright (c) 2015 by Contributors
  * \file batch_norm.cc
  * \brief
  * \author Bing Xu, Chris Olivier
@@ -230,7 +231,7 @@ void BatchNormOp<xpu, DType, AccReal>::DoBackward(mshadow::Stream<cpu> *,
   #pragma omp parallel for
   for (int channel = 0; channel < static_cast<int>(channelCount); ++channel) {
     const AccReal *weight = weights.dptr<AccReal>();
-    const AccReal w = weight ? weight[channel] : AccReal(1);
+    const AccReal w = !param_.fix_gamma ? weight[channel] : AccReal(1);
     AccReal mean, invstd;
     if (is_train_and_not_global_stats) {
       mean = saveMeanDataPtr[channel];

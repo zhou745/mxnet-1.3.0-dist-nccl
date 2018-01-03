@@ -18,6 +18,7 @@
  */
 
 /*!
+ *  Copyright (c) 2016 by Contributors
  * \file initialize.cc
  * \brief initialize mxnet library
  */
@@ -53,7 +54,9 @@ class LibraryInitializer {
  public:
   LibraryInitializer() {
     dmlc::InitLogging("mxnet");
-    // signal(SIGSEGV, segfault_logger);
+#if MXNET_USE_SIGNAL_HANDLER
+    signal(SIGSEGV, segfault_logger);
+#endif
 #if MXNET_USE_PROFILER
     // ensure profiler's constructor are called before atexit.
     engine::Profiler::Get();
@@ -74,6 +77,11 @@ LibraryInitializer* LibraryInitializer::Get() {
   static LibraryInitializer inst;
   return &inst;
 }
+
+#ifdef __GNUC__
+// Don't print an unused variable message since this is intentional
+#pragma GCC diagnostic ignored "-Wunused-variable"
+#endif
 
 static LibraryInitializer* __library_init = LibraryInitializer::Get();
 }  // namespace mxnet

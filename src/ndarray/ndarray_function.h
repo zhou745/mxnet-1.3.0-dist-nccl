@@ -18,6 +18,7 @@
  */
 
 /*!
+ *  Copyright (c) 2015 by Contributors
  * \file ndarray_op.h
  * \brief the real execution functions of ndarray operations
  */
@@ -28,6 +29,7 @@
 #include <mshadow/tensor.h>
 #include <mxnet/base.h>
 #include <mxnet/resource.h>
+#include <mxnet/ndarray.h>
 #include <vector>
 #include "../operator/mshadow_op.h"
 
@@ -167,6 +169,15 @@ template<typename Device>
 void ElementwiseSum(const std::vector<TBlob> source,
                     TBlob *out,
                     RunContext ctx);
+
+/*!
+ * \brief Interface for parallel impl of elemwise sum for sparse matrices
+ */
+template<typename xpu>
+void ElementwiseSum(mshadow::Stream<xpu>* s,
+                    const Resource& rsc,
+                    const std::vector<NDArray>& nds,
+                    NDArray* out);
 
 // broadcasting
 template <typename Device>
