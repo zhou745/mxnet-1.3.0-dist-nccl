@@ -18,10 +18,9 @@
  */
 
 /*!
- * Copyright (c) 2015 by Contributors
  * \file proposal-inl.h
  * \brief Proposal Operator
- * \author Piotr Teterwak, Bing Xu, Jian Guo, Pengfei Chen
+ * \author Piotr Teterwak, Bing Xu, Jian Guo, Pengfei Chen, Yuntao Chen
 */
 #ifndef MXNET_OPERATOR_CONTRIB_PROPOSAL_INL_H_
 #define MXNET_OPERATOR_CONTRIB_PROPOSAL_INL_H_
@@ -39,6 +38,95 @@
 #include "../operator_common.h"
 #include "../mshadow_op.h"
 
+// extend NumericalParam
+namespace mxnet {
+namespace op {
+
+/*!
+* \brief structure for numerical tuple input
+* \tparam VType data type of param
+*/
+template<typename VType>
+struct NumericalParam {
+  NumericalParam() {}
+  explicit NumericalParam(VType *begin, VType *end) {
+    int32_t size = static_cast<int32_t>(end - begin);
+    info.resize(size);
+    for (int i = 0; i < size; ++i) {
+      info[i] = *(begin + i);
+    }
+  }
+  inline size_t ndim() const {
+    return info.size();
+  }
+  std::vector<VType> info;
+};
+
+template<typename VType>
+inline std::istream &operator>>(std::istream &is, NumericalParam<VType> &param) {
+  while (true) {
+    char ch = is.get();
+    if (ch == '(') break;
+    if (!isspace(ch)) {
+      is.setstate(std::ios::failbit);
+      return is;
+    }
+  }
+  VType idx;
+  std::vector<VType> tmp;
+  // deal with empty case
+  size_t pos = is.tellg();
+  char ch = is.get();
+  if (ch == ')') {
+    param.info = tmp;
+    return is;
+  }
+  is.seekg(pos);
+  // finish deal
+  while (is >> idx) {
+    tmp.push_back(idx);
+    char ch;
+    do {
+      ch = is.get();
+    } while (isspace(ch));
+    if (ch == ',') {
+      while (true) {
+        ch = is.peek();
+        if (isspace(ch)) {
+          is.get(); continue;
+        }
+        if (ch == ')') {
+          is.get(); break;
+        }
+        break;
+      }
+      if (ch == ')') break;
+    } else if (ch == ')') {
+      break;
+    } else {
+      is.setstate(std::ios::failbit);
+      return is;
+    }
+  }
+  param.info = tmp;
+  return is;
+}
+
+template<typename VType>
+inline std::ostream &operator<<(std::ostream &os, const NumericalParam<VType> &param) {
+  os << '(';
+  for (index_t i = 0; i < param.info.size(); ++i) {
+    if (i != 0) os << ',';
+    os << param.info[i];
+  }
+  // python style tuple
+  if (param.info.size() == 1) os << ',';
+  os << ')';
+  return os;
+}
+
+}  // namespace op
+}  // namespace mxnet
 
 namespace mxnet {
 namespace op {
@@ -46,7 +134,7 @@ namespace op {
 namespace proposal {
 enum ProposalOpInputs {kClsProb, kBBoxPred, kImInfo};
 enum ProposalOpOutputs {kOut, kScore};
-enum ProposalForwardResource {kTempResource};
+enum ProposalForwardResource {kTempSpace};
 }  // proposal
 
 struct ProposalParam : public dmlc::Parameter<ProposalParam> {
@@ -54,11 +142,13 @@ struct ProposalParam : public dmlc::Parameter<ProposalParam> {
   int rpn_post_nms_top_n;
   float threshold;
   int rpn_min_size;
-  nnvm::Tuple<float> scales;
-  nnvm::Tuple<float> ratios;
+  NumericalParam<float> scales;
+  NumericalParam<float> ratios;
   int feature_stride;
   bool output_score;
   bool iou_loss;
+  uint64_t workspace;
+
   DMLC_DECLARE_PARAMETER(ProposalParam) {
     float tmp[] = {0, 0, 0, 0};
     DMLC_DECLARE_FIELD(rpn_pre_nms_top_n).set_default(6000)
@@ -71,10 +161,10 @@ struct ProposalParam : public dmlc::Parameter<ProposalParam> {
     DMLC_DECLARE_FIELD(rpn_min_size).set_default(16)
     .describe("Minimum height or width in proposal");
     tmp[0] = 4.0f; tmp[1] = 8.0f; tmp[2] = 16.0f; tmp[3] = 32.0f;
-    DMLC_DECLARE_FIELD(scales).set_default(nnvm::Tuple<float>(tmp, tmp + 4))
+    DMLC_DECLARE_FIELD(scales).set_default(NumericalParam<float>(tmp, tmp + 4))
     .describe("Used to generate anchor windows by enumerating scales");
     tmp[0] = 0.5f; tmp[1] = 1.0f; tmp[2] = 2.0f;
-    DMLC_DECLARE_FIELD(ratios).set_default(nnvm::Tuple<float>(tmp, tmp + 3))
+    DMLC_DECLARE_FIELD(ratios).set_default(NumericalParam<float>(tmp, tmp + 3))
     .describe("Used to generate anchor windows by enumerating ratios");
     DMLC_DECLARE_FIELD(feature_stride).set_default(16)
     .describe("The size of the receptive field each unit in the convolution layer of the rpn,"
@@ -83,6 +173,8 @@ struct ProposalParam : public dmlc::Parameter<ProposalParam> {
     .describe("Add score to outputs");
     DMLC_DECLARE_FIELD(iou_loss).set_default(false)
     .describe("Usage of IoU Loss");
+    DMLC_DECLARE_FIELD(workspace).set_default(256)
+    .describe("Workspace for proposal in MB, default to 256");
   }
 };
 
@@ -206,17 +298,16 @@ inline void _Transform(float scale,
   float new_w = std::floor(std::sqrt(size_ratios) + 0.5f) * scale;
   float new_h = std::floor((new_w / scale * ratio) + 0.5f) * scale;
 
-  _MakeAnchor(new_w, new_h, x_ctr,
-             y_ctr, out_anchors);
+  _MakeAnchor(new_w, new_h, x_ctr, y_ctr, out_anchors);
 }
 
 // out_anchors must have shape (n, 5), where n is ratios.size() * scales.size()
 inline void GenerateAnchors(const std::vector<float>& base_anchor,
-                            const nnvm::Tuple<float>& ratios,
-                            const nnvm::Tuple<float>& scales,
+                            const std::vector<float>& ratios,
+                            const std::vector<float>& scales,
                             std::vector<float> *out_anchors) {
-  for (size_t j = 0; j < ratios.ndim(); ++j) {
-    for (size_t k = 0; k < scales.ndim(); ++k) {
+  for (size_t j = 0; j < ratios.size(); ++j) {
+    for (size_t k = 0; k < scales.size(); ++k) {
       _Transform(scales[k], ratios[j], base_anchor, out_anchors);
     }
   }

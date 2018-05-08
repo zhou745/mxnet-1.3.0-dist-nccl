@@ -18,10 +18,9 @@
  */
 
 /*!
- * Copyright (c) 2015 by Contributors
  * \file proposal.cu
  * \brief Proposal Operator
- * \author Shaoqing Ren, Jian Guo, Pengfei Chen
+ * \author Shaoqing Ren, Jian Guo, Pengfei Chen, Yuntao Chen
 */
 #include <dmlc/logging.h>
 #include <dmlc/parameter.h>
@@ -56,7 +55,7 @@ namespace mshadow {
 namespace cuda {
 
 // scores are (b, anchor, h, w)
-// workspace_proposals are (h * w * anchor, 5)
+// proposals are (h * w * anchor, 5)
 // w defines "x" and h defines "y"
 // count should be total anchors numbers, h * w * anchors
 template<typename Dtype>
@@ -66,7 +65,7 @@ __global__ void ProposalGridKernel(const int count,
                                    const int width,
                                    const int feature_stride,
                                    const Dtype* scores,
-                                   Dtype* workspace_proposals) {
+                                   Dtype* proposals) {
   for (int index = blockIdx.x * blockDim.x + threadIdx.x;
        index < count;
        index += blockDim.x * gridDim.x) {
@@ -74,11 +73,11 @@ __global__ void ProposalGridKernel(const int count,
     int w = (index / num_anchors) % width;
     int h = index / num_anchors / width;
 
-    workspace_proposals[index * 5 + 0] = workspace_proposals[a * 5 + 0] + w * feature_stride;
-    workspace_proposals[index * 5 + 1] = workspace_proposals[a * 5 + 1] + h * feature_stride;
-    workspace_proposals[index * 5 + 2] = workspace_proposals[a * 5 + 2] + w * feature_stride;
-    workspace_proposals[index * 5 + 3] = workspace_proposals[a * 5 + 3] + h * feature_stride;
-    workspace_proposals[index * 5 + 4] = scores[(a * height + h) * width + w];
+    proposals[index * 5 + 0] = proposals[a * 5 + 0] + w * feature_stride;
+    proposals[index * 5 + 1] = proposals[a * 5 + 1] + h * feature_stride;
+    proposals[index * 5 + 2] = proposals[a * 5 + 2] + w * feature_stride;
+    proposals[index * 5 + 3] = proposals[a * 5 + 3] + h * feature_stride;
+    proposals[index * 5 + 4] = scores[(a * height + h) * width + w];
   }
 }
 
@@ -308,17 +307,23 @@ __global__ void nms_kernel(const int n_boxes, const float nms_overlap_thresh,
 void _nms(const mshadow::Tensor<gpu, 2>& boxes,
           const float nms_overlap_thresh,
           int *keep,
-          int *num_out) {
+          int *num_out,
+          uint64_t *mask_dev,
+          uint64_t *mask_host) {
+  /*
+  @input  boxes: (pre_nms_top_n, 5)
+  @return keep
+  @return num_out
+  @tmp    mask_dev
+  @tmp    mask_host
+  */
   const int threadsPerBlock = sizeof(uint64_t) * 8;
   const int boxes_num = boxes.size(0);
   const int boxes_dim = boxes.size(1);
 
   float* boxes_dev = boxes.dptr_;
-  uint64_t* mask_dev = NULL;
 
   const int col_blocks = DIVUP(boxes_num, threadsPerBlock);
-  FRCNN_CUDA_CHECK(cudaMalloc(&mask_dev,
-                              boxes_num * col_blocks * sizeof(uint64_t)));
 
   dim3 blocks(DIVUP(boxes_num, threadsPerBlock),
               DIVUP(boxes_num, threadsPerBlock));
@@ -328,8 +333,8 @@ void _nms(const mshadow::Tensor<gpu, 2>& boxes,
                                   boxes_dev,
                                   mask_dev);
   FRCNN_CUDA_CHECK(cudaPeekAtLastError());
-  std::vector<uint64_t> mask_host(boxes_num * col_blocks);
-  FRCNN_CUDA_CHECK(cudaMemcpy(&mask_host[0],
+
+  FRCNN_CUDA_CHECK(cudaMemcpy(mask_host,
                               mask_dev,
                               sizeof(uint64_t) * boxes_num * col_blocks,
                               cudaMemcpyDeviceToHost));
@@ -344,15 +349,13 @@ void _nms(const mshadow::Tensor<gpu, 2>& boxes,
 
     if (!(remv[nblock] & (1ULL << inblock))) {
       keep[num_to_keep++] = i;
-      uint64_t *p = &mask_host[0] + i * col_blocks;
+      uint64_t *p = mask_host + i * col_blocks;
       for (int j = nblock; j < col_blocks; j++) {
         remv[j] |= p[j];
       }
     }
   }
   *num_out = num_to_keep;
-
-  FRCNN_CUDA_CHECK(cudaFree(mask_dev));
 }
 
 // copy proposals to output
@@ -414,16 +417,17 @@ class ProposalGPUOp : public Operator{
 
     Stream<xpu> *s = ctx.get_stream<xpu>();
 
-    Shape<3> fg_scores_shape = Shape3(in_data[proposal::kClsProb].shape_[1] / 2,
-                                      in_data[proposal::kClsProb].shape_[2],
-                                      in_data[proposal::kClsProb].shape_[3]);
+    Tensor<xpu, 4> scores = in_data[proposal::kClsProb].get<xpu, 4, float>(s); // batch_idx, anchor_idx, height_idx, width_idx
+    Tensor<xpu, 4> bbox_deltas = in_data[proposal::kBBoxPred].get<xpu, 4, float>(s); // batch_idx, height_idx, width_idx, anchor_idx
+    Tensor<xpu, 2> im_info = in_data[proposal::kImInfo].get<xpu, 2, float>(s); // batch_idx, 3(height, width, scale)
 
-    Tensor<xpu, 4> scores = in_data[proposal::kClsProb].get<xpu, 4, real_t>(s);
-    Tensor<xpu, 4> bbox_deltas = in_data[proposal::kBBoxPred].get<xpu, 4, real_t>(s);
-    Tensor<xpu, 2> im_info = in_data[proposal::kImInfo].get<xpu, 2, real_t>(s);
+    Tensor<xpu, 3> out = out_data[proposal::kOut].get<xpu, 3, float>(s); // batch_idx, rois_idx, 5(batch_idx, x1, y1, x2, y2), batch_idx is needed after flatten
+    Tensor<xpu, 3> out_score = out_data[proposal::kScore].get<xpu, 3, float>(s); // batch_idx, rois_idx, 1(score)
 
-    Tensor<xpu, 3> out = out_data[proposal::kOut].get<xpu, 3, real_t>(s);
-    Tensor<xpu, 3> out_score = out_data[proposal::kScore].get<xpu, 3, real_t>(s);
+    uint64_t WORKSPACE_LIMIT = 1024 * 1024 * param_.workspace; // 256 MB should be sufficient
+    Tensor<xpu, 1, uint8_t> workspace = ctx.requested[proposal::kTempSpace].get_space_typed<xpu, 1, uint8_t>(Shape1(WORKSPACE_LIMIT), s);
+    uint64_t allocated_bytes = 0ULL;
+    uint64_t allocated_bytes_outside_loop = 0ULL;
 
     int nbatch = scores.size(0);
     int num_anchors = scores.size(1) / 2;
@@ -441,137 +445,154 @@ class ProposalGPUOp : public Operator{
     base_anchor[1] = 0.0;
     base_anchor[2] = param_.feature_stride - 1.0;
     base_anchor[3] = param_.feature_stride - 1.0;
-    CHECK_EQ(num_anchors, param_.ratios.ndim() * param_.scales.ndim());
+    CHECK_EQ(num_anchors, param_.ratios.info.size() * param_.scales.info.size());
     std::vector<float> anchors;
     utils::GenerateAnchors(base_anchor,
-                           param_.ratios,
-                           param_.scales,
+                           param_.ratios.info,
+                           param_.scales.info,
                            &anchors);
 
     // Copy generated anchors to GPU
-    float* workspace_proposals_ptr = NULL;
-    FRCNN_CUDA_CHECK(cudaMalloc(&workspace_proposals_ptr, sizeof(float) * nbatch * count * 5));
-    Tensor<xpu, 3> workspace_proposals(workspace_proposals_ptr, Shape3(nbatch, count, 5));
+    Tensor<xpu, 3> proposals(reinterpret_cast<float *>(workspace.dptr_ + allocated_bytes), Shape3(nbatch, count, 5));
+    allocated_bytes += nbatch * count * 5 * sizeof(float);
+    CHECK_LT(allocated_bytes, WORKSPACE_LIMIT) << "Allocating more memory than workspace limit";
 
-      // im_info is small, we want to copy them to cpu
-      std::vector<float> cpu_im_info(3);
-      FRCNN_CUDA_CHECK(cudaMemcpy(&cpu_im_info[0], im_info.dptr_,
-                                  sizeof(float) * cpu_im_info.size(),
-                                  cudaMemcpyDeviceToHost));
+    // im_info is small, we want to copy them to cpu
+    std::vector<float> cpu_im_info(3);
+    FRCNN_CUDA_CHECK(cudaMemcpy(cpu_im_info.data(), 
+                                im_info.dptr_,
+                                sizeof(float) * cpu_im_info.size(),
+                                cudaMemcpyDeviceToHost)); // less than 64K
 
-      // prevent padded predictions
-      int real_height = static_cast<int>(cpu_im_info[0] / param_.feature_stride);
-      int real_width = static_cast<int>(cpu_im_info[1] / param_.feature_stride);
-      CHECK_GE(height, real_height) << height << " " << real_height << std::endl;
-      CHECK_GE(width, real_width) << width << " " << real_width << std::endl;
+    // prevent padded predictions
+    int real_height = static_cast<int>(cpu_im_info[0] / param_.feature_stride);
+    int real_width = static_cast<int>(cpu_im_info[1] / param_.feature_stride);
+    CHECK_GE(height, real_height) << height << " " << real_height << std::endl;
+    CHECK_GE(width, real_width) << width << " " << real_width << std::endl;
+    
+    Shape<3> fg_scores_shape = Shape3(in_data[proposal::kClsProb].shape_[1] / 2,
+                                      in_data[proposal::kClsProb].shape_[2], 
+                                      in_data[proposal::kClsProb].shape_[3]);
 
-    // Copy anchors for all images in batch
+    allocated_bytes_outside_loop = allocated_bytes;
+    /* copy anchors for all images in batch */
     for (int i = 0; i < nbatch; i++) {
-      float* cur_batch_workspace_proposals_ptr = workspace_proposals.dptr_ + i * 5 * count;
-      FRCNN_CUDA_CHECK(cudaMemcpy(cur_batch_workspace_proposals_ptr,
-                                  &anchors[0], sizeof(float) * anchors.size(),
-        cudaMemcpyHostToDevice));
+      float* batch_proposals = proposals.dptr_ + i * 5 * count;
+      FRCNN_CUDA_CHECK(cudaMemcpy(batch_proposals,
+                                  &anchors[0], 
+                                  sizeof(float) * anchors.size(),
+                                  cudaMemcpyHostToDevice)); // less than 64K
 
-      // get current batch foreground score
-      real_t* foreground_score_ptr = reinterpret_cast<real_t *>(scores.dptr_) + i * 2 * count
-                                      + fg_scores_shape.Size();
+      /* get current batch foreground score */
+      float* foreground_score_ptr = reinterpret_cast<float *>(scores.dptr_) + i * 2 * count + fg_scores_shape.Size();
       Tensor<xpu, 3> fg_scores = Tensor<xpu, 3>(foreground_score_ptr, fg_scores_shape);
 
-      // Copy proposals to a mesh grid
+      /* copy proposals to a mesh grid */
       dim3 dimGrid((count + kMaxThreadsPerBlock - 1) / kMaxThreadsPerBlock);
       dim3 dimBlock(kMaxThreadsPerBlock);
       CheckLaunchParam(dimGrid, dimBlock, "ProposalGrid");
       ProposalGridKernel<<<dimGrid, dimBlock>>>(
         count, num_anchors, height, width, param_.feature_stride,
-        fg_scores.dptr_, cur_batch_workspace_proposals_ptr);
+        fg_scores.dptr_, batch_proposals);
       FRCNN_CUDA_CHECK(cudaPeekAtLastError());
 
-      // Transform anchors and bbox_deltas into bboxes
+      /* transform anchors and bbox_deltas into bboxes */
       CheckLaunchParam(dimGrid, dimBlock, "BBoxPred");
       if (param_.iou_loss) {
         IoUPredKernel<<<dimGrid, dimBlock>>>(
           count, num_anchors, height, width, real_height, real_width,
           cpu_im_info[0], cpu_im_info[1],
-          cur_batch_workspace_proposals_ptr, bbox_deltas.dptr_ + i * 4 * count, cur_batch_workspace_proposals_ptr);
+          batch_proposals, bbox_deltas.dptr_ + i * 4 * count, batch_proposals);
       } else {
         BBoxPredKernel<<<dimGrid, dimBlock>>>(
           count, num_anchors, height, width, real_height, real_width,
           cpu_im_info[0], cpu_im_info[1],
-          cur_batch_workspace_proposals_ptr, bbox_deltas.dptr_ + i * 4 * count, cur_batch_workspace_proposals_ptr);
+          batch_proposals, bbox_deltas.dptr_ + i * 4 * count, batch_proposals);
       }
       FRCNN_CUDA_CHECK(cudaPeekAtLastError());
 
-      // filter boxes with less than rpn_min_size
+      /* filter boxes with less than rpn_min_size */
       CheckLaunchParam(dimGrid, dimBlock, "FilterBox");
       FilterBoxKernel<<<dimGrid, dimBlock>>>(
-        count, param_.rpn_min_size * cpu_im_info[2], cur_batch_workspace_proposals_ptr);
+        count, param_.rpn_min_size * cpu_im_info[2], batch_proposals);
       FRCNN_CUDA_CHECK(cudaPeekAtLastError());
 
-      // Copy score to a continuous memory
-      float* score_ptr = NULL;
-      FRCNN_CUDA_CHECK(cudaMalloc(&score_ptr, sizeof(float) * count));
-      Tensor<xpu, 1> score(score_ptr, Shape1(count));
-      int* order_ptr = NULL;
-      FRCNN_CUDA_CHECK(cudaMalloc(&order_ptr, sizeof(int) * count));
-      Tensor<xpu, 1, int> order(order_ptr, Shape1(count));
+      /* copy score to a continuous memory */
+      Tensor<xpu, 1> score(reinterpret_cast<float *>(workspace.dptr_ + allocated_bytes), Shape1(count));
+      allocated_bytes += count * sizeof(float);
+      CHECK_LT(allocated_bytes, WORKSPACE_LIMIT) << "Allocating more memory than workspace limit";      
+
+      Tensor<xpu, 1, int> order(reinterpret_cast<int *>(workspace.dptr_ + allocated_bytes), Shape1(count));
+      allocated_bytes += count * sizeof(int);
+      CHECK_LT(allocated_bytes, WORKSPACE_LIMIT) << "Allocating more memory than workspace limit";      
 
       CheckLaunchParam(dimGrid, dimBlock, "CopyScore");
       CopyScoreKernel<<<dimGrid, dimBlock>>>(
-        count, cur_batch_workspace_proposals_ptr, score.dptr_, order.dptr_);
+        count, batch_proposals, score.dptr_, order.dptr_);
       FRCNN_CUDA_CHECK(cudaPeekAtLastError());
 
-      // argsort score, save order
+      /* argsort score, save order */
       thrust::stable_sort_by_key(thrust::device,
                                  score.dptr_,
                                  score.dptr_ + score.size(0),
                                  order.dptr_,
-                                 thrust::greater<real_t>());
+                                 thrust::greater<float>());
       FRCNN_CUDA_CHECK(cudaPeekAtLastError());
 
-      // Reorder proposals according to order
-      float* workspace_ordered_proposals_ptr = NULL;
-      FRCNN_CUDA_CHECK(cudaMalloc(&workspace_ordered_proposals_ptr,
-                                  sizeof(float) * rpn_pre_nms_top_n * 5));
-      Tensor<xpu, 2> workspace_ordered_proposals(workspace_ordered_proposals_ptr,
-                                                 Shape2(rpn_pre_nms_top_n, 5));
+      /* Reorder proposals according to order */
+      Tensor<xpu, 2> ordered_proposals(reinterpret_cast<float *>(workspace.dptr_ + allocated_bytes), Shape2(rpn_pre_nms_top_n, 5));
+      allocated_bytes += rpn_pre_nms_top_n * 5 * sizeof(float);
+      CHECK_LT(allocated_bytes, WORKSPACE_LIMIT) << "Allocating more memory than workspace limit";      
 
       dimGrid.x = (rpn_pre_nms_top_n + kMaxThreadsPerBlock - 1) / kMaxThreadsPerBlock;
       CheckLaunchParam(dimGrid, dimBlock, "ReorderProposals");
       ReorderProposalsKernel<<<dimGrid, dimBlock>>>(
-        rpn_pre_nms_top_n, cur_batch_workspace_proposals_ptr, order.dptr_, workspace_ordered_proposals.dptr_);
+        rpn_pre_nms_top_n, batch_proposals, order.dptr_, ordered_proposals.dptr_);
       FRCNN_CUDA_CHECK(cudaPeekAtLastError());
 
-      FRCNN_CUDA_CHECK(cudaFree(score_ptr));
-      FRCNN_CUDA_CHECK(cudaFree(order_ptr));
-
-      // perform nms
-      std::vector<int> _keep(workspace_ordered_proposals.size(0));
+      /* perform nms */
+      std::vector<int> _keep(rpn_pre_nms_top_n);
       int out_size = 0;
-      _nms(workspace_ordered_proposals,
+      const int boxes_num = rpn_pre_nms_top_n;
+      const int col_blocks = DIVUP(boxes_num, sizeof(uint64_t) * 8);
+      // take special care when allocate memory of 8-byte alignment.
+      allocated_bytes += allocated_bytes % sizeof(uint64_t);
+      Tensor<xpu, 1, uint64_t> mask_tensor(reinterpret_cast<uint64_t *>(workspace.dptr_ + allocated_bytes), Shape1(boxes_num * col_blocks));
+      allocated_bytes += boxes_num * col_blocks * sizeof(uint64_t); 
+      CHECK_LT(allocated_bytes, WORKSPACE_LIMIT) << "Allocating more memory than workspace limit";   
+      // the following line does not need change since it the only place where requires host workspace
+      Tensor<cpu, 1, uint64_t> mask_host_tensor = ctx.requested[proposal::kTempSpace].get_host_space_typed<1, uint64_t>(Shape1(boxes_num * col_blocks));
+      uint64_t *mask_dev = mask_tensor.dptr_;
+      uint64_t *mask_host = mask_host_tensor.dptr_;
+      _nms(ordered_proposals,
            param_.threshold,
            &_keep[0],
-           &out_size);
+           &out_size,
+           mask_dev,
+           mask_host);
 
-      // copy nms result to gpu
-      int* keep;
-      FRCNN_CUDA_CHECK(cudaMalloc(&keep, sizeof(int) * _keep.size()));
-      FRCNN_CUDA_CHECK(cudaMemcpy(keep, &_keep[0], sizeof(int) * _keep.size(),
-                                  cudaMemcpyHostToDevice));
+      /* copy nms result to gpu */
+      Tensor<xpu, 1, int> keep(reinterpret_cast<int *>(workspace.dptr_ + allocated_bytes), Shape1(_keep.size()));
+      allocated_bytes += _keep.size() * sizeof(int);
+      CHECK_LT(allocated_bytes, WORKSPACE_LIMIT) << "Allocating more memory than workspace limit";
+      
+      FRCNN_CUDA_CHECK(cudaMemcpy(keep.dptr_, 
+                                  &_keep[0], 
+                                  sizeof(int) * _keep.size(),
+                                  cudaMemcpyHostToDevice)); // less than 64K
 
-      // copy results after nms
+      /* copy results after nms */
       dimGrid.x = (rpn_post_nms_top_n + kMaxThreadsPerBlock - 1) / kMaxThreadsPerBlock;
       CheckLaunchParam(dimGrid, dimBlock, "PrepareOutput");
       PrepareOutput<<<dimGrid, dimBlock>>>(
-        rpn_post_nms_top_n, workspace_ordered_proposals.dptr_, keep, out_size, i,
+        rpn_post_nms_top_n, ordered_proposals.dptr_, keep.dptr_, out_size, i,
         out.dptr_ + i * 5 * rpn_post_nms_top_n, 
         out_score.dptr_ + i * rpn_post_nms_top_n);
       FRCNN_CUDA_CHECK(cudaPeekAtLastError());
-
-      // free temporary memory
-      FRCNN_CUDA_CHECK(cudaFree(keep));
-      FRCNN_CUDA_CHECK(cudaFree(workspace_ordered_proposals_ptr));
+      
+      // recycle all bytes allocated within loop
+      allocated_bytes = allocated_bytes_outside_loop;
     }
-    FRCNN_CUDA_CHECK(cudaFree(workspace_proposals_ptr));
   }
 
   virtual void Backward(const OpContext &ctx,
