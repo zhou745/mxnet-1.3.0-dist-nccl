@@ -18,10 +18,9 @@
  */
 
 /*!
- * Copyright (c) 2015 by Contributors
  * \file proposal.cc
  * \brief
- * \author Piotr Teterwak, Bing Xu, Jian Guo
+ * \author Piotr Teterwak, Bing Xu, Jian Guo, Yuntao Chen
 */
 
 #include "./proposal-inl.h"
@@ -324,7 +323,7 @@ class ProposalOp : public Operator{
     int rpn_post_nms_top_n = std::min(param_.rpn_post_nms_top_n, rpn_pre_nms_top_n);
 
     int workspace_size = nbatch * (count * 5 + 2 * count + rpn_pre_nms_top_n * 5 + 3 * rpn_pre_nms_top_n);
-    Tensor<cpu, 1> workspace = ctx.requested[proposal::kTempResource].get_space<cpu>(
+    Tensor<cpu, 1> workspace = ctx.requested[proposal::kTempSpace].get_space<cpu>(
       Shape1(workspace_size), s);
     int start = 0;
     Tensor<cpu, 3> workspace_proposals(workspace.dptr_ + start, Shape3(nbatch, count, 5));
@@ -344,11 +343,11 @@ class ProposalOp : public Operator{
     base_anchor[1] = 0.0;
     base_anchor[2] = param_.feature_stride - 1.0;
     base_anchor[3] = param_.feature_stride - 1.0;
-    CHECK_EQ(num_anchors, param_.ratios.ndim() * param_.scales.ndim());
+    CHECK_EQ(num_anchors, param_.ratios.info.size() * param_.scales.info.size());
     std::vector<float> anchors;
     utils::GenerateAnchors(base_anchor,
-                           param_.ratios,
-                           param_.scales,
+                           param_.ratios.info,
+                           param_.scales.info,
                            &anchors);
     for(int n = 0; n < nbatch; n++) {
       std::memcpy(workspace_proposals.dptr_ + n * 5 * count, &anchors[0], sizeof(float) * anchors.size());
