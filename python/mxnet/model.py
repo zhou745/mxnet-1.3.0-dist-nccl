@@ -28,7 +28,7 @@ from collections import namedtuple
 import numpy as np
 
 from . import io
-from . import nd
+from . import ndarray as nd
 from . import symbol as sym
 from . import optimizer as opt
 from . import metric
@@ -40,6 +40,9 @@ from .executor_manager import DataParallelExecutorManager, _check_arguments, _lo
 from .io import DataDesc
 from .base import mx_real_t
 
+# added by cxt
+import numpy as np
+
 BASE_ESTIMATOR = object
 
 try:
@@ -49,11 +52,47 @@ except ImportError:
     SKLEARN_INSTALLED = False
 
 # Parameter to pass to batch_end_callback
+# BatchEndParam = namedtuple('BatchEndParams',
+#                            ['epoch',
+#                             'nbatch',
+#                             'eval_metric',
+#                             'locals'])
+
 BatchEndParam = namedtuple('BatchEndParams',
-                           ['epoch',
-                            'nbatch',
-                            'eval_metric',
-                            'locals'])
+                          ['epoch',
+                           'nbatch',
+                           'eval_metric',
+                           'locals',
+                           'rank',
+                           'total_iter',
+                           'cur_data_time',
+                           'avg_data_time',
+                           'cur_batch_time',
+                           'avg_batch_time',
+                           'cur_kvstore_sync_time',
+                           'avg_kvstore_sync_time',
+                           'cur_iter_total_time',
+                           'avg_iter_total_time'
+                           ])
+
+def _create_sparse_kvstore(kvstore):
+    """Create kvstore assuming some parameters' storage types are row_sparse.
+
+    Parameters
+    ----------
+    kvstore : KVStore or str
+        The kvstore.
+    """
+    # always update on kvstore
+    update_on_kvstore = True
+    if isinstance(kvstore, kvs.KVStore):
+        kv = kvstore
+    elif isinstance(kvstore, str):
+        kv = kvs.create(kvstore)
+    else:
+        raise TypeError("Cannot create '%s' KVStore with row_sparse parameters. "
+                        "The type must be KVStore or str." % kvstore)
+    return (kv, update_on_kvstore)
 
 def _create_kvstore(kvstore, num_device, arg_params):
     """Create kvstore
@@ -130,6 +169,28 @@ def _update_params_on_kvstore(param_arrays, grad_arrays, kvstore, param_names):
         if grad_list[0] is None:
             continue
         name = param_names[index]
+
+        # added by cxt
+        # fliter_prefixs = ['stage3_unit1_', 'stage3_unit2_', 'stage3_unit3_', 'stage3_unit4_', 'stage3_unit5_',
+        #                   'stage3_unit6_', 'stage3_unit7_', 'stage3_unit8_', 'stage3_unit9_', 'stage3_unit10_',
+        #                   'stage3_unit11_', 'stage3_unit12_', 'stage3_unit13_', 'stage3_unit14_', 'stage3_unit15_']
+        # temp_flag = False
+        # for prefix in fliter_prefixs:
+        #     if prefix in name:
+        #         temp_flag = True
+        #         break
+        # if temp_flag:
+        #     continue
+
+        # # added by cxt
+        # grad_list_fp16 = [nd.cast(grad, dtype='float16') for grad in grad_list]
+        # if grad_list_fp16[0].dtype == np.float16:
+        #     print('[added by cxt] push grad_fp16')
+        # # push gradient, priority is negative index
+        # kvstore.push(name, grad_list_fp16, priority=-index)
+        # # pull back the weights
+        # kvstore.pull(name, arg_list, priority=-index)
+
         # push gradient, priority is negative index
         kvstore.push(name, grad_list, priority=-index)
         # pull back the weights
@@ -253,6 +314,8 @@ def _train_multi_device(symbol, ctx, arg_names, param_names, aux_names,
 
     if not update_on_kvstore:
         updater = get_updater(optimizer)
+    else:
+        kvstore.set_optimizer(optimizer)
 
     if kvstore:
         _initialize_kvstore(kvstore=kvstore,
@@ -260,9 +323,6 @@ def _train_multi_device(symbol, ctx, arg_names, param_names, aux_names,
                             arg_params=arg_params,
                             param_names=executor_manager.param_names,
                             update_on_kvstore=update_on_kvstore)
-
-    if update_on_kvstore:
-        kvstore.set_optimizer(optimizer)
 
     # Now start training
     train_data.reset()
@@ -592,15 +652,17 @@ class FeedForward(BASE_ESTIMATOR):
 
     def _init_predictor(self, input_shapes, type_dict=None):
         """Initialize the predictor module for running prediction."""
+        shapes = {name: self.arg_params[name].shape for name in self.arg_params}
+        shapes.update(dict(input_shapes))
         if self._pred_exec is not None:
-            arg_shapes, _, _ = self.symbol.infer_shape(**dict(input_shapes))
+            arg_shapes, _, _ = self.symbol.infer_shape(**shapes)
             assert arg_shapes is not None, "Incomplete input shapes"
             pred_shapes = [x.shape for x in self._pred_exec.arg_arrays]
             if arg_shapes == pred_shapes:
                 return
         # for now only use the first device
         pred_exec = self.symbol.simple_bind(
-            self.ctx[0], grad_req='null', type_dict=type_dict, **dict(input_shapes))
+            self.ctx[0], grad_req='null', type_dict=type_dict, **shapes)
         pred_exec.copy_params_from(self.arg_params, self.aux_params)
 
         _check_arguments(self.symbol)
@@ -848,7 +910,7 @@ class FeedForward(BASE_ESTIMATOR):
         # init optmizer
         if isinstance(self.optimizer, str):
             batch_size = data.batch_size
-            if kvstore and 'dist' in kvstore.type and not '_async' in kvstore.type:
+            if kvstore and 'dist' in kvstore.type and '_async' not in kvstore.type:
                 batch_size *= kvstore.num_workers
             optimizer = opt.create(self.optimizer,
                                    rescale_grad=(1.0/batch_size),
