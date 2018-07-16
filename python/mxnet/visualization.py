@@ -26,7 +26,7 @@ from __future__ import absolute_import
 import re
 import copy
 import json
-
+import warnings
 from .symbol import Symbol
 
 def _str2tuple(string):
@@ -134,20 +134,24 @@ def print_summary(symbol, shape=None, line_length=120, positions=[.44, .64, .74,
                             pre_filter = pre_filter + int(shape[0])
         cur_param = 0
         if op == 'Convolution':
-            if ("no_bias" in node["attrs"]) and (node["attrs"]["no_bias"] == 'True'):
-                cur_param = pre_filter * int(node["attrs"]["num_filter"])
+            if "no_bias" in node["attrs"] and node["attrs"]["no_bias"] == 'True':
+                num_group = int(node['attrs'].get('num_group', '1'))
+                cur_param = pre_filter * int(node["attrs"]["num_filter"]) \
+                   // num_group
                 for k in _str2tuple(node["attrs"]["kernel"]):
                     cur_param *= int(k)
             else:
-                cur_param = pre_filter * int(node["attrs"]["num_filter"])
+                num_group = int(node['attrs'].get('num_group', '1'))
+                cur_param = pre_filter * int(node["attrs"]["num_filter"]) \
+                   // num_group
                 for k in _str2tuple(node["attrs"]["kernel"]):
                     cur_param *= int(k)
                 cur_param += int(node["attrs"]["num_filter"])
         elif op == 'FullyConnected':
-            if ("no_bias" in node["attrs"]) and int(node["attrs"]["no_bias"]):
-                cur_param = pre_filter * (int(node["attrs"]["num_hidden"]))
+            if "no_bias" in node["attrs"] and node["attrs"]["no_bias"] == 'True':
+                cur_param = pre_filter * int(node["attrs"]["num_hidden"])
             else:
-                cur_param = (pre_filter+1) * (int(node["attrs"]["num_hidden"]))
+                cur_param = (pre_filter+1) * int(node["attrs"]["num_hidden"])
         elif op == 'BatchNorm':
             key = node["name"] + "_output"
             if show_shape:
@@ -248,6 +252,15 @@ def plot_network(symbol, title="plot", save_format='pdf', shape=None, node_attrs
         shape_dict = dict(zip(interals.list_outputs(), out_shapes))
     conf = json.loads(symbol.tojson())
     nodes = conf["nodes"]
+    # check if multiple nodes have the same name
+    if len(nodes) != len(set([node["name"] for node in nodes])):
+        seen_nodes = set()
+        # find all repeated names
+        repeated = set(node['name'] for node in nodes if node['name'] in seen_nodes
+                       or seen_nodes.add(node['name']))
+        warning_message = "There are multiple variables with the same name in your graph, " \
+                          "this may result in cyclic graph. Repeated names: " + ','.join(repeated)
+        warnings.warn(warning_message, RuntimeWarning)
     # default attributes of node
     node_attr = {"shape": "box", "fixedsize": "true",
                  "width": "1.3", "height": "0.8034", "style": "filled"}
@@ -261,14 +274,9 @@ def plot_network(symbol, title="plot", save_format='pdf', shape=None, node_attrs
     def looks_like_weight(name):
         """Internal helper to figure out if node should be hidden with `hide_weights`.
         """
-        if name.endswith("_weight"):
-            return True
-        if name.endswith("_bias"):
-            return True
-        if name.endswith("_beta") or name.endswith("_gamma") or \
-	   name.endswith("_moving_var") or name.endswith("_moving_mean"):
-            return True
-        return False
+        weight_like = ('_weight', '_bias', '_beta', '_gamma',
+                       '_moving_var', '_moving_mean', '_running_var', '_running_mean')
+        return name.endswith(weight_like)
 
     # make nodes
     hidden_nodes = set()
