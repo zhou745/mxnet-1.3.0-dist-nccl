@@ -31,7 +31,6 @@
 #endif  // MXNET_USE_DIST_KVSTORE
 #if MXNET_USE_NCCL
 #include "./kvstore_nccl.h"
-#include "./nccl_zhoujq.h"
 #endif  // MXNET_USE_NCCL
 
 //zhoujq added
@@ -70,11 +69,7 @@ KVStore* KVStore::Create(const char *type_name) {
   } else {
     if (has("nccl")) {
 #if MXNET_USE_NCCL
-      if(has("zhoujq")){
-          kv = new kvstore::KVStoreNcclZhoujq();
-      } else {
           kv = new kvstore::KVStoreNCCL();
-      }
 #else
       LOG(FATAL) << "compile with USE_NCCL=1 to use " << tname;
       return nullptr;
