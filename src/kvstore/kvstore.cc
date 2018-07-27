@@ -31,8 +31,13 @@
 #endif  // MXNET_USE_DIST_KVSTORE
 #if MXNET_USE_NCCL
 #include "./kvstore_nccl.h"
+#include "./nccl_zhoujq.h"
 #endif  // MXNET_USE_NCCL
 
+//zhoujq added
+#if MXNET_USE_NCCL && MXNET_USE_DIST_KVSTORE
+#include "./kvstore_dist_nccl.h"
+#endif
 namespace mxnet {
 
 KVStore* KVStore::Create(const char *type_name) {
@@ -49,10 +54,14 @@ KVStore* KVStore::Create(const char *type_name) {
 
   if (has("dist")) {
 #if MXNET_USE_DIST_KVSTORE
+    if(has("nccl")){
+     kv = new kvstore::KVStoreDistNccl();        //zhoujq added
+    } else {
     kv = new kvstore::KVStoreDist(use_device_comm);
     if (!has("_async") && kv->IsWorkerNode() && kv->get_rank() == 0) {
       // configure the server to be the sync mode
       kv->SendCommandToServers(static_cast<int>(kvstore::CommandType::kSyncMode), "");
+      }
     }
 #else
     LOG(FATAL) << "compile with USE_DIST_KVSTORE=1 to use " << tname;
@@ -61,7 +70,11 @@ KVStore* KVStore::Create(const char *type_name) {
   } else {
     if (has("nccl")) {
 #if MXNET_USE_NCCL
-      kv = new kvstore::KVStoreNCCL();
+      if(has("zhoujq")){
+          kv = new kvstore::KVStoreNcclZhoujq();
+      } else {
+          kv = new kvstore::KVStoreNCCL();
+      }
 #else
       LOG(FATAL) << "compile with USE_NCCL=1 to use " << tname;
       return nullptr;
